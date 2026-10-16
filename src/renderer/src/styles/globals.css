@@ -30,19 +30,52 @@ body {
 }
 
 /*
- * Placeholder drawing surface until the canvas engine adapter lands
- * (Milestone 2, NFR-MAINT-05). The dot pattern stands in for FR-CANVAS-05 and is
- * built entirely from Astryx tokens — no raw hex or pixel values, per AGENTS.md.
+ * Drawing surface. The grid itself is drawn inside the SVG (so it pans and zooms
+ * with the content); this element only provides the backdrop and the box the
+ * canvas fills. Token-only, no raw hex or pixel values, per AGENTS.md.
  */
 .canvas-host {
     flex: 1;
     min-height: 0;
+    overflow: hidden;
     border-radius: var(--radius-container);
     background-color: var(--color-background-body);
-    background-image: radial-gradient(
-        var(--color-border-emphasized) var(--spacing-0-5),
-        transparent 0
-    );
-    background-size: var(--spacing-4) var(--spacing-4);
-    background-position: center;
+}
+
+.canvas-grid-mark {
+    fill: var(--color-border-emphasized);
+}
+
+.canvas-grid-line {
+    stroke: var(--color-border-emphasized);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+}
+
+.canvas-hover-outline {
+    stroke: var(--color-border-emphasized);
+    stroke-width: 1;
+}
+
+.canvas-selection-outline {
+    stroke: var(--color-accent);
+    stroke-width: 1;
+}
+
+.canvas-resize-handle {
+    fill: var(--color-background-surface);
+    stroke: var(--color-accent);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+}
+
+.canvas-marquee {
+    fill: var(--color-accent-muted);
+    fill-opacity: 0.35;
+    stroke: var(--color-accent);
+    stroke-width: 1;
+}
+
+.canvas-preview {
+    stroke: var(--color-accent);
 }

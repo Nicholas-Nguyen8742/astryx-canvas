@@ -20,11 +20,16 @@ import type { AppInfo, AutosaveEntry, RecentFile } from "../../shared/ipc";
 import { astryxTheme } from "./design-system/astryx-theme";
 import {
   UNTITLED_DOCUMENT_TITLE,
-  createEmptyDocument,
   serializeDocument,
 } from "./document/empty-document";
-import type { DiagramDocument, ThemeMode } from "./document/model";
+import type { ThemeMode } from "./document/model";
 import { parseDocument } from "./document/validate";
+import { canvasEngine } from "./editor/canvas/adapter";
+import { SvgCanvas } from "./editor/canvas/SvgCanvas";
+import { fitViewport, zoomAtCenter } from "./editor/geometry";
+import { useDocumentStore } from "./state/document-store";
+import { useEditorStore, type ActiveTool } from "./state/editor-store";
+import { useHistoryStore } from "./state/history-store";
 
 /** TRD §16.3: autosave 2s after the last change. */
 const AUTOSAVE_DEBOUNCE_MS = 2000;
@@ -37,6 +42,18 @@ const THEME_MODE_LABEL: Record<ThemeMode, string> = {
   system: "System",
 };
 
+const TOOLS: readonly { tool: ActiveTool; label: string }[] = [
+  { tool: "select", label: "Select" },
+  { tool: "rectangle", label: "Rectangle" },
+  { tool: "roundedRectangle", label: "Rounded" },
+  { tool: "ellipse", label: "Ellipse" },
+  { tool: "text", label: "Text" },
+  { tool: "pan", label: "Pan" },
+];
+
+/** FR-CANVAS-03: one toolbar step, matching a ctrl+wheel notch. */
+const ZOOM_STEP = 1.25;
+
 interface StatusMessage {
   kind: "info" | "error";
   text: string;
@@ -45,16 +62,35 @@ interface StatusMessage {
 export function App(): React.JSX.Element {
   const desktop = window.astryxDesktop;
 
-  const [diagram, setDiagram] = useState<DiagramDocument>(() =>
-    createEmptyDocument(),
+  // The document store is the single source of truth; App holds only file and
+  // session concerns that are not part of the diagram itself.
+  const diagram = useDocumentStore((state) => state.document);
+  const isDirty = useDocumentStore((state) => state.isDirty);
+  const activePageId = useDocumentStore((state) => state.activePageId);
+
+  const canUndo = useHistoryStore((state) => state.past.length > 0);
+  const canRedo = useHistoryStore((state) => state.future.length > 0);
+  const undoLabel = useHistoryStore(
+    (state) => state.past[state.past.length - 1]?.label,
   );
+  const redoLabel = useHistoryStore((state) => state.future[0]?.label);
+
+  const activeTool = useEditorStore((state) => state.activeTool);
+  const selection = useEditorStore((state) => state.selection);
+  const viewport = useEditorStore((state) => state.viewport);
+  const cursorWorld = useEditorStore((state) => state.cursorWorld);
+  const gridEnabled = useEditorStore((state) => state.grid.enabled);
+
   const [filePath, setFilePath] = useState<string | null>(null);
-  const [isDirty, setIsDirty] = useState(false);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [themeMode, setThemeMode] = useState<ThemeMode>("system");
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
   const [recovery, setRecovery] = useState<AutosaveEntry | null>(null);
   const [status, setStatus] = useState<StatusMessage | null>(null);
+
+  const activePage = diagram.pages.find((page) => page.id === activePageId);
+  const objectCount = activePage?.objects.length ?? 0;
+  const connectorCount = activePage?.connectors.length ?? 0;
 
   const refreshRecent = useCallback(async (): Promise<void> => {
     if (!desktop) return;
@@ -62,20 +98,23 @@ export function App(): React.JSX.Element {
     if (result.ok) setRecentFiles(result.value);
   }, [desktop]);
 
+  const resetSession = useCallback((): void => {
+    useHistoryStore.getState().clear();
+    useEditorStore.getState().clearSelection();
+  }, []);
+
   useEffect(() => {
     if (!desktop) return;
-    // StrictMode double-invokes effects in development. Without this flag both
-    // passes run to completion and race each other on the same state, which is
-    // harmless for these read-only startup calls but would not stay harmless
-    // once the effect grows side effects.
+    // StrictMode double-invokes effects in development; without this flag both
+    // passes race on the same state.
     let cancelled = false;
     void (async () => {
       const info = await desktop.app.getInfo();
       if (cancelled) return;
       if (info.ok) setAppInfo(info.value);
-      // Startup record (TRD §21.1). Also the proof that the preload bridge
-      // round-trips: this only lands in renderer.log if contextBridge and the
-      // matching ipcMain.handle are both wired correctly.
+      // Startup record (TRD §21.1) and proof that the preload bridge round-trips:
+      // this only lands in renderer.log if contextBridge and ipcMain.handle are
+      // both wired correctly.
       await desktop.log({
         level: "info",
         message: "Renderer mounted",
@@ -86,7 +125,6 @@ export function App(): React.JSX.Element {
       const autosaves = await desktop.autosave.list();
       if (cancelled) return;
       if (autosaves.ok && autosaves.value.length > 0) {
-        // Newest first, per store-autosave ordering.
         setRecovery(autosaves.value[0] ?? null);
       }
     })();
@@ -109,13 +147,12 @@ export function App(): React.JSX.Element {
   }, [desktop, isDirty, diagram, filePath]);
 
   const handleNew = useCallback((): void => {
-    const blank = createEmptyDocument();
-    setDiagram(blank);
+    useDocumentStore.getState().newDocument();
+    resetSession();
     setFilePath(null);
-    setIsDirty(false);
-    setThemeMode(blank.meta.astryxTheme ?? "system");
+    setThemeMode("system");
     setStatus({ kind: "info", text: "Started a new blank diagram." });
-  }, []);
+  }, [resetSession]);
 
   const handleOpen = useCallback(async (): Promise<void> => {
     if (!desktop) return;
@@ -139,21 +176,21 @@ export function App(): React.JSX.Element {
       return;
     }
 
-    setDiagram(parsed.document);
+    useDocumentStore.getState().loadDocument(parsed.document);
+    resetSession();
     setFilePath(opened);
-    setIsDirty(false);
     setThemeMode(parsed.document.meta.astryxTheme ?? "system");
     await refreshRecent();
     setStatus({ kind: "info", text: `Opened ${parsed.document.meta.title}.` });
-  }, [desktop, refreshRecent]);
+  }, [desktop, refreshRecent, resetSession]);
 
   const handleSave = useCallback(async (): Promise<void> => {
     if (!desktop) return;
-    const contents = serializeDocument(diagram);
+    const current = useDocumentStore.getState().document;
     const result = await desktop.dialog.saveDocument({
       filePath,
-      contents,
-      suggestedName: diagram.meta.title || UNTITLED_DOCUMENT_TITLE,
+      contents: serializeDocument(current),
+      suggestedName: current.meta.title || UNTITLED_DOCUMENT_TITLE,
     });
     if (!result.ok) {
       setStatus({ kind: "error", text: result.error.message });
@@ -162,12 +199,12 @@ export function App(): React.JSX.Element {
     if (result.value.canceled || result.value.filePath === null) return;
 
     setFilePath(result.value.filePath);
-    setIsDirty(false);
+    useDocumentStore.getState().markClean();
     // The saved file is now the source of truth; the recovery copy is stale.
-    await desktop.autosave.clear(diagram.documentId);
+    await desktop.autosave.clear(current.documentId);
     await refreshRecent();
     setStatus({ kind: "info", text: `Saved ${result.value.filePath}.` });
-  }, [desktop, diagram, filePath, refreshRecent]);
+  }, [desktop, filePath, refreshRecent]);
 
   const handleRestore = useCallback(async (): Promise<void> => {
     if (!desktop || !recovery) return;
@@ -188,13 +225,19 @@ export function App(): React.JSX.Element {
       return;
     }
 
-    setDiagram(parsed.document);
+    useDocumentStore.getState().loadDocument(parsed.document);
+    resetSession();
     setFilePath(result.value.entry.originalPath);
-    setThemeMode(parsed.document.meta.astryxTheme ?? "system");
-    setIsDirty(true);
+    // loadDocument marks the document clean, but restored autosave content has
+    // never been saved to a real file. Writing the theme back through setMeta
+    // both applies the stored preference and leaves the document dirty, so the
+    // status bar tells the truth and autosave keeps running.
+    const restoredMode = parsed.document.meta.astryxTheme ?? "system";
+    setThemeMode(restoredMode);
+    useDocumentStore.getState().setMeta({ astryxTheme: restoredMode });
     setRecovery(null);
     setStatus({ kind: "info", text: "Restored unsaved work from autosave." });
-  }, [desktop, recovery]);
+  }, [desktop, recovery, resetSession]);
 
   const handleDiscardRecovery = useCallback(async (): Promise<void> => {
     if (!desktop || !recovery) return;
@@ -207,11 +250,46 @@ export function App(): React.JSX.Element {
   /** Theme choice is document metadata (§12.1), so changing it dirties the file. */
   const applyThemeMode = useCallback((mode: ThemeMode): void => {
     setThemeMode(mode);
-    setDiagram((current) => ({
-      ...current,
-      meta: { ...current.meta, astryxTheme: mode },
-    }));
-    setIsDirty(true);
+    useDocumentStore.getState().setMeta({ astryxTheme: mode });
+  }, []);
+
+  const handleUndo = useCallback(
+    (): void => useHistoryStore.getState().undo(),
+    [],
+  );
+  const handleRedo = useCallback(
+    (): void => useHistoryStore.getState().redo(),
+    [],
+  );
+
+  const zoomByCentered = useCallback((factor: number): void => {
+    const editor = useEditorStore.getState();
+    editor.setViewport(
+      zoomAtCenter(editor.viewport, editor.viewportSize, factor),
+    );
+  }, []);
+
+  // FR-CANVAS-08: fit the drawing's real bounds, not the whole infinite canvas.
+  const handleFit = useCallback((): void => {
+    const editor = useEditorStore.getState();
+    const current = useDocumentStore.getState();
+    const page = current.document.pages.find(
+      (p) => p.id === current.activePageId,
+    );
+    const bounds = canvasEngine.getContentBounds(page?.objects ?? []);
+    editor.setViewport(fitViewport(bounds, editor.viewportSize));
+  }, []);
+
+  const handleResetZoom = useCallback((): void => {
+    useEditorStore.getState().resetZoom();
+  }, []);
+
+  const handleToggleGrid = useCallback((): void => {
+    useEditorStore.getState().toggleGrid();
+  }, []);
+
+  const selectTool = useCallback((tool: ActiveTool): void => {
+    useEditorStore.getState().setTool(tool);
   }, []);
 
   // FR-PROD-01 / §19.1. Native menus will own these later; the renderer binding
@@ -219,6 +297,9 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (!(event.metaKey || event.ctrlKey)) return;
+      const target = event.target as HTMLElement | null;
+      if (target && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return;
+
       const key = event.key.toLowerCase();
       if (key === "n") {
         event.preventDefault();
@@ -229,11 +310,17 @@ export function App(): React.JSX.Element {
       } else if (key === "s" && !event.shiftKey) {
         event.preventDefault();
         void handleSave();
+      } else if (key === "z" && !event.shiftKey) {
+        event.preventDefault();
+        handleUndo();
+      } else if ((key === "z" && event.shiftKey) || key === "y") {
+        event.preventDefault();
+        handleRedo();
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleNew, handleOpen, handleSave]);
+  }, [handleNew, handleOpen, handleSave, handleUndo, handleRedo]);
 
   if (!desktop) {
     return (
@@ -252,13 +339,10 @@ export function App(): React.JSX.Element {
     );
   }
 
-  const page = diagram.pages[0];
-  const objectCount = page?.objects.length ?? 0;
-  const connectorCount = page?.connectors.length ?? 0;
-  const zoomPercent = Math.round((page?.viewport.zoom ?? 1) * 100);
   const fileName = filePath
     ? (filePath.split(/[\\/]/).pop() ?? filePath)
     : UNTITLED_DOCUMENT_TITLE;
+  const zoomPercent = Math.round(viewport.zoom * 100);
 
   return (
     <Theme theme={astryxTheme} mode={themeMode}>
@@ -273,6 +357,18 @@ export function App(): React.JSX.Element {
                 {isDirty ? "Unsaved changes" : "Saved"}
               </Text>
               <StackItem size="fill" />
+              <Button
+                label={undoLabel ? `Undo ${undoLabel}` : "Undo"}
+                size="sm"
+                isDisabled={!canUndo}
+                onClick={handleUndo}
+              />
+              <Button
+                label={redoLabel ? `Redo ${redoLabel}` : "Redo"}
+                size="sm"
+                isDisabled={!canRedo}
+                onClick={handleRedo}
+              />
               <Button label="New diagram" size="sm" onClick={handleNew} />
               <Button label="Open diagram" size="sm" clickAction={handleOpen} />
               <Button
@@ -296,17 +392,59 @@ export function App(): React.JSX.Element {
         start={
           <LayoutPanel
             hasDivider
-            width={248}
+            width={220}
             role="navigation"
-            label="Stencil library"
+            label="Tools and stencils"
           >
             <VStack gap={3}>
-              <Heading level={5}>Architecture stencils</Heading>
-              <Text type="supporting" color="secondary">
-                The stencil library arrives with Milestone 3 (FR-ARCH-01).
-                Placement, ports and connector attachment are wired to the
-                canvas engine there.
-              </Text>
+              <Heading level={5}>Tools</Heading>
+              <VStack gap={1}>
+                {TOOLS.map((entry) => (
+                  <Button
+                    key={entry.tool}
+                    label={entry.label}
+                    size="sm"
+                    width="100%"
+                    variant={activeTool === entry.tool ? "primary" : "ghost"}
+                    onClick={() => selectTool(entry.tool)}
+                  />
+                ))}
+              </VStack>
+
+              <Heading level={5}>View</Heading>
+              <VStack gap={1}>
+                <Button
+                  label="Zoom in"
+                  size="sm"
+                  width="100%"
+                  onClick={() => zoomByCentered(ZOOM_STEP)}
+                />
+                <Button
+                  label="Zoom out"
+                  size="sm"
+                  width="100%"
+                  onClick={() => zoomByCentered(1 / ZOOM_STEP)}
+                />
+                <Button
+                  label="Fit to screen"
+                  size="sm"
+                  width="100%"
+                  onClick={handleFit}
+                />
+                <Button
+                  label="Reset to 100%"
+                  size="sm"
+                  width="100%"
+                  onClick={handleResetZoom}
+                />
+                <Button
+                  label={gridEnabled ? "Hide grid" : "Show grid"}
+                  size="sm"
+                  width="100%"
+                  onClick={handleToggleGrid}
+                />
+              </VStack>
+
               <Heading level={5}>Recent</Heading>
               {recentFiles.length === 0 ? (
                 <Text type="supporting" color="secondary">
@@ -327,15 +465,16 @@ export function App(): React.JSX.Element {
         end={
           <LayoutPanel
             hasDivider
-            width={280}
+            width={260}
             role="complementary"
             label="Inspector"
           >
             <VStack gap={3}>
               <Heading level={5}>Inspector</Heading>
               <Text type="supporting" color="secondary">
-                Nothing selected. Object, connector and document styling
-                controls land with the canvas engine (FR-STYLE-01).
+                {selection.length === 0
+                  ? "Nothing selected. Draw a shape from the tool rail, then select it to edit its geometry and style."
+                  : `${selection.length} object${selection.length === 1 ? "" : "s"} selected. Style controls arrive with the inspector milestone.`}
               </Text>
             </VStack>
           </LayoutPanel>
@@ -376,17 +515,7 @@ export function App(): React.JSX.Element {
                   {status.text}
                 </Text>
               ) : null}
-              <div className="canvas-host">
-                <Center>
-                  <VStack gap={2}>
-                    <Heading level={4}>Blank canvas</Heading>
-                    <Text type="supporting" color="secondary">
-                      Pan, zoom, grid and object tools arrive with the canvas
-                      engine adapter (Milestone 2, NFR-MAINT-05).
-                    </Text>
-                  </VStack>
-                </Center>
-              </div>
+              <SvgCanvas />
             </VStack>
           </LayoutContent>
         }
@@ -402,6 +531,14 @@ export function App(): React.JSX.Element {
               </Text>
               <Text type="supporting" color="secondary">
                 {connectorCount} connectors
+              </Text>
+              <Text type="supporting" color="secondary">
+                {selection.length} selected
+              </Text>
+              <Text type="supporting" color="secondary">
+                {cursorWorld
+                  ? `x ${Math.round(cursorWorld.x)}  y ${Math.round(cursorWorld.y)}`
+                  : "x —  y —"}
               </Text>
               <Text type="supporting" color="secondary">
                 {zoomPercent}%
