@@ -17,12 +17,14 @@
     "verbatimModuleSyntax": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
   },
   "include": [
     "src/renderer/src/**/*.ts",
     "src/renderer/src/**/*.tsx",
     "src/shared/**/*.ts",
-    "astryx-themes.js"
-  ]
+    "tests/**/*.ts",
+    "vitest.config.ts",
+    "astryx-themes.js",
+  ],
 }

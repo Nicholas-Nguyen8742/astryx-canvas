@@ -15,6 +15,9 @@
     "typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "typecheck:node": "tsc -p tsconfig.node.json --noEmit",
     "typecheck:web": "tsc -p tsconfig.web.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "pack": "electron-vite build && electron-builder --dir",
     "dist": "electron-vite build && electron-builder",
     "astryx:doctor": "astryx doctor"
@@ -37,7 +40,8 @@
     "@stylexjs/stylex": "^0.19.1",
     "lucide-react": "^1.18.0",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "zustand": "^5.0.15"
   },
   "devDependencies": {
     "@astryxdesign/cli": "^0.7.1",
@@ -50,6 +54,7 @@
     "electron-builder": "^26.15.3",
     "electron-vite": "^6.0.0",
     "typescript": "~5.9.3",
-    "vite": "^7.3.7"
+    "vite": "^7.3.7",
+    "vitest": "^5.0.5"
   }
 }
