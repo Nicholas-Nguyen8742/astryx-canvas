@@ -1,0 +1,20 @@
+/**
+ * Offline replacement for `@astryxdesign/theme-neutral/fonts.css`.
+ *
+ * The package stylesheet is a single `@import url('https://fonts.googleapis.com/...')`
+ * for Figtree. That violates the offline mandate (NFR-OFF-01/02/05), the "no CDN
+ * references" rule (TRD §11.6) and the renderer CSP, which sets `font-src 'self'
+ * data:` and `connect-src 'none'`. `electron.vite.config.ts` aliases the package
+ * specifier to this file, so the generated root-level `astryx-themes.js` keeps
+ * importing the same path and `astryx doctor`'s record check still passes.
+ *
+ * This file deliberately declares nothing. The theme's own stacks already degrade
+ * cleanly -- `--font-family-body` resolves to Figtree, then -apple-system,
+ * BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial -- so the UI is
+ * correct without a webfont, and no `:root` override is needed (which AGENTS.md
+ * forbids for palette and theme values).
+ *
+ * To restore exact Figtree fidelity offline, vendor the OFL-licensed woff2 files
+ * under `resources/fonts/figtree/` and add `@font-face` rules here pointing at
+ * them with `font-display: swap`. Local files satisfy `font-src 'self'`.
+ */

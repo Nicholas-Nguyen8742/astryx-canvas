@@ -1,0 +1,48 @@
+@import "@astryxdesign/core/reset.css";
+@import "@astryxdesign/core/astryx.css";
+
+/*
+ * The theme stylesheet and its (offline) font sheet arrive through the generated
+ * `astryx-themes.js` module, which the renderer imports for its Theme object.
+ * Astryx puts component rules in the `astryx-base` layer and theme rules in
+ * `astryx-theme`, so cascade order is settled by layers rather than by the order
+ * these imports happen to appear in.
+ */
+
+html,
+body,
+#root {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    overflow: hidden;
+}
+
+/*
+ * Text only exposes primary/secondary/disabled/placeholder/accent/inherit, so a
+ * destructive status message is coloured from the theme's own semantic red token
+ * rather than by inventing a colour prop or hardcoding a hex value.
+ */
+.status-error {
+    color: var(--color-text-red);
+}
+
+/*
+ * Placeholder drawing surface until the canvas engine adapter lands
+ * (Milestone 2, NFR-MAINT-05). The dot pattern stands in for FR-CANVAS-05 and is
+ * built entirely from Astryx tokens — no raw hex or pixel values, per AGENTS.md.
+ */
+.canvas-host {
+    flex: 1;
+    min-height: 0;
+    border-radius: var(--radius-container);
+    background-color: var(--color-background-body);
+    background-image: radial-gradient(
+        var(--color-border-emphasized) var(--spacing-0-5),
+        transparent 0
+    );
+    background-size: var(--spacing-4) var(--spacing-4);
+    background-position: center;
+}
