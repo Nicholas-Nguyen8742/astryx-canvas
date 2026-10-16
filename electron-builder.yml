@@ -1,0 +1,70 @@
+appId: com.astryx.architecture-canvas
+productName: Astryx Architecture Canvas
+copyright: Copyright © 2026
+
+directories:
+  buildResources: build
+  output: dist
+
+files:
+  - out/**
+  - package.json
+  - "!**/*.map"
+
+# No auto-update channel: the app is offline-first and must not reach the network
+# on launch (TRD §23.6, NFR-OFF-06).
+electronLanguages:
+  - en-US
+
+asar: true
+asarUnpack:
+  - resources/**
+
+fileAssociations:
+  - ext: astrx
+    name: Astryx Diagram
+    description: Astryx Architecture Canvas diagram
+    mimeType: application/x-astryx-diagram
+    role: Editor
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+        - arm64
+    - target: portable
+      arch:
+        - x64
+  # Signing is deliberately left unconfigured: it needs a certificate the
+  # repository must not contain (TRD §23.5, NFR-SEC-12).
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  createDesktopShortcut: true
+  artifactName: ${productName}-Setup-${version}.${ext}
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+  category: public.app-category.developer-tools
+  hardenedRuntime: true
+  gatekeeperAssess: false
+
+linux:
+  target:
+    - AppImage
+    - deb
+    - rpm
+  category: Development
+  maintainer: Astryx Architecture Canvas
+  synopsis: Offline system architecture diagram editor
+  description: Blank-canvas diagram editor for system architecture, built on the Astryx Design System.
