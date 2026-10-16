@@ -8,3 +8,6 @@ build/output/
 Thumbs.db
 .env
 .env.*
+
+# Local agent workspace (session state, background shell output, worktrees).
+.qwen/
