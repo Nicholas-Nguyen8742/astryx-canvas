@@ -3,6 +3,7 @@ import type {
   ColorValue,
   Connector,
   DiagramObject,
+  TextContent,
   Transform,
 } from "../../document/model";
 import type { ResolvedConnector } from "../connectors";
@@ -184,6 +185,49 @@ export function connectorAttrs(
   if (end) attrs["marker-end"] = `url(#${end})`;
 
   return attrs;
+}
+
+/** Size for a connector label whose TextContent carries no style of its own. */
+const CONNECTOR_LABEL_FONT_SIZE = 12;
+
+/**
+ * Attributes for a connector's label.
+ *
+ * `ConnectorStyle` has no text block, so styling comes from the label's own
+ * `TextContent.style` — the same `TextStyle` an object label uses. There is no
+ * token-plus-hex pairing here, because `TextStyle.color` is a plain string
+ * rather than a `ColorValue`; the fallback below is therefore what keeps an
+ * exported label legible once the file leaves the app's stylesheet.
+ *
+ * `halo` is stroked *behind* the glyphs via `paint-order`. Without it the label
+ * sits directly on the line it describes and the stroke runs through the text,
+ * which is the single most common way edge labels end up unreadable.
+ */
+export function connectorLabelAttrs(
+  label: TextContent,
+  resolved: ResolvedConnector,
+  target: "dom" | "export",
+  halo: string,
+): Record<string, string | number> {
+  const textStyle = label.style;
+  const color = textStyle?.color;
+  return {
+    x: resolved.labelAnchor.x,
+    y: resolved.labelAnchor.y,
+    fill:
+      typeof color === "string" && color.length > 0
+        ? color
+        : target === "dom"
+          ? "var(--color-text-primary)"
+          : "#000000",
+    stroke: halo,
+    "stroke-width": 3,
+    "stroke-linejoin": "round",
+    "paint-order": "stroke",
+    "font-size": textStyle?.fontSize ?? CONNECTOR_LABEL_FONT_SIZE,
+    "text-anchor": "middle",
+    "dominant-baseline": "middle",
+  };
 }
 
 export interface ShapeGeometry {

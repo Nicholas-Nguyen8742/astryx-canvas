@@ -9,6 +9,7 @@ import { resolveConnectors, type ResolvedConnector } from "../connectors";
 import {
   arrowMarkerDefs,
   connectorAttrs,
+  connectorLabelAttrs,
   escapeXml,
   shapeGeometry,
 } from "./shape-attrs";
@@ -62,9 +63,23 @@ function renderObject(object: DiagramObject): string {
 function renderConnector(
   connector: Connector,
   resolved: ResolvedConnector,
+  halo: string,
 ): string {
-  const attrs = connectorAttrs(connector, resolved, "export");
-  return `<path id="${escapeXml(connector.id)}" ${attributesToString(attrs)} />`;
+  const path = `<path id="${escapeXml(connector.id)}" ${attributesToString(
+    connectorAttrs(connector, resolved, "export"),
+  )} />`;
+
+  const content = connector.label;
+  const value = content?.value;
+  if (!content || !value || value.length === 0) return path;
+
+  // A sibling of the path, emitted after it, so the label paints over the line
+  // it describes. Multiline values are not split into tspans here: connector
+  // labels are short by nature, and inventing a wrapping rule for them is a
+  // layout problem better solved once, for object labels and these together.
+  return `${path}\n  <text id="${escapeXml(connector.id)}-label" ${attributesToString(
+    connectorLabelAttrs(content, resolved, "export", halo),
+  )}>${escapeXml(value)}</text>`;
 }
 
 /**
@@ -113,6 +128,11 @@ export function serializeObjectsToSvg(
 
   const body = objects.map((object) => `  ${renderObject(object)}`).join("\n");
 
+  // The halo behind a label has to be something concrete: a transparent export
+  // has no backdrop to knock out, so white is the only sane default, and it is
+  // right for the overwhelmingly common case of a file viewed on screen or paper.
+  const labelHalo = background === "transparent" ? "#ffffff" : background;
+
   // Connectors paint after objects so an arrowhead meeting a shape's perimeter is
   // not half-covered by the shape it points at. Anchors are clipped to the
   // perimeter, so a path never extends past the objects' own bounds and the
@@ -121,7 +141,7 @@ export function serializeObjectsToSvg(
     .filter((connector) => connector.visible)
     .map((connector) => {
       const path = resolved.get(connector.id);
-      return path ? `  ${renderConnector(connector, path)}` : "";
+      return path ? `  ${renderConnector(connector, path, labelHalo)}` : "";
     })
     .filter((line) => line.length > 0)
     .join("\n");

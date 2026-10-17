@@ -60,6 +60,7 @@ import {
   ARROW_MARKER_SHAPES,
   arrowMarkerId,
   connectorAttrs,
+  connectorLabelAttrs,
   shapeGeometry,
 } from "./shape-attrs";
 import {
@@ -222,6 +223,7 @@ function RenderedConnector({
   resolved: ResolvedConnector;
 }) {
   const attrs = connectorAttrs(connector, resolved, "dom");
+  const label = connector.label?.value;
   return (
     <g
       data-connector-id={connector.id}
@@ -236,6 +238,21 @@ function RenderedConnector({
         vectorEffect="non-scaling-stroke"
       />
       <path {...attrs} vectorEffect="non-scaling-stroke" />
+      {connector.label && label ? (
+        <text
+          {...connectorLabelAttrs(
+            connector.label,
+            resolved,
+            "dom",
+            // The canvas backdrop rather than a literal white, so the halo knocks
+            // the line out instead of painting a pale patch over a dark theme.
+            "var(--color-background-body)",
+          )}
+          vectorEffect="non-scaling-stroke"
+        >
+          {label}
+        </text>
+      ) : null}
     </g>
   );
 }

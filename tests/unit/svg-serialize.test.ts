@@ -389,6 +389,79 @@ describe("connector export", () => {
     expect(svg).toContain(`marker-start="url(#${arrowMarkerId("circle")})"`);
   });
 
+  it("draws a label at the resolved anchor", () => {
+    const svg = serializeObjectsToSvg(shapes, {
+      connectors: [conn({ label: { value: "HTTPS" } })],
+    });
+    expect(svg).toContain('<text id="edge-1-label"');
+    expect(svg).toContain("HTTPS");
+    // Side by side, so the anchor is the midpoint between the two facing edges.
+    expect(svg).toContain('x="150"');
+    expect(svg).toContain('y="50"');
+  });
+
+  it("emits no text element for an unlabelled or empty-labelled connector", () => {
+    expect(
+      serializeObjectsToSvg(shapes, { connectors: [conn()] }),
+    ).not.toContain("<text ");
+    expect(
+      serializeObjectsToSvg(shapes, {
+        connectors: [conn({ label: { value: "" } })],
+      }),
+    ).not.toContain("<text ");
+  });
+
+  it("escapes XML metacharacters in a label", () => {
+    const svg = serializeObjectsToSvg(shapes, {
+      connectors: [conn({ label: { value: `a < b & "c" > d` } })],
+    });
+    expect(svg).toContain("&lt;");
+    expect(svg).toContain("&amp;");
+    expect(svg).toContain("&gt;");
+    expect(svg.replace(/&(amp|lt|gt|quot|apos);/g, "")).not.toContain("&");
+  });
+
+  it("knocks the line out from behind the label instead of drawing through it", () => {
+    const svg = serializeObjectsToSvg(shapes, {
+      connectors: [conn({ label: { value: "HTTPS" } })],
+    });
+    expect(svg).toContain('paint-order="stroke"');
+    // A transparent export has no backdrop to borrow, so the halo falls back to
+    // white rather than to nothing, which would leave the line through the text.
+    expect(svg).toContain('stroke="#ffffff"');
+  });
+
+  it("takes the label halo from an explicit export background", () => {
+    const svg = serializeObjectsToSvg(shapes, {
+      background: "#101010",
+      connectors: [conn({ label: { value: "HTTPS" } })],
+    });
+    // Otherwise a dark-background export gets white halos on every label.
+    expect(svg).toContain('stroke="#101010"');
+  });
+
+  it("honours a label's own font size and colour", () => {
+    const svg = serializeObjectsToSvg(shapes, {
+      connectors: [
+        conn({
+          label: { value: "HTTPS", style: { fontSize: 18, color: "#ff0000" } },
+        }),
+      ],
+    });
+    expect(svg).toContain('font-size="18"');
+    expect(svg).toContain('fill="#ff0000"');
+  });
+
+  it("paints the label after its own path so the line cannot cover it", () => {
+    const svg = serializeObjectsToSvg(shapes, {
+      connectors: [conn({ label: { value: "HTTPS" } })],
+    });
+    // Compared against the connector's own path, not the first <path> in the
+    // document: the arrowhead marker is also a path and is emitted in <defs>,
+    // well before the body.
+    expect(svg.indexOf("<text ")).toBeGreaterThan(svg.indexOf('id="edge-1"'));
+  });
+
   it("serialises without connectors exactly as before", () => {
     // The option is additive: existing callers pass nothing and must not gain a
     // defs block or an empty group.
