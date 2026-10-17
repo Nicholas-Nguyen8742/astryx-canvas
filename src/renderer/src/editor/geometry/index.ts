@@ -2,6 +2,7 @@ import type {
   BoundingBox,
   DiagramObject,
   Point,
+  PortDefinition,
   Transform,
   Viewport,
 } from "../../document/model";
@@ -320,6 +321,60 @@ export function portWorldPoint(transform: Transform, port: Point): Point {
     x: centerX + localX * Math.cos(radians) - localY * Math.sin(radians),
     y: centerY + localX * Math.sin(radians) + localY * Math.cos(radians),
   };
+}
+
+/**
+ * The cardinal ports every shape offers when the document stores none.
+ *
+ * Derived rather than written into each object, for two reasons: four ports on
+ * every shape is document bloat for information that is a pure function of the
+ * box, and documents saved before ports existed would otherwise have none at all
+ * and could never be wired to one. Ids are short and stable so a `portId` in a
+ * saved file resolves against this set.
+ *
+ * Only *custom* ports need storing, which keeps the format meaning what it says.
+ */
+export const DEFAULT_PORTS: readonly PortDefinition[] = [
+  { id: "n", x: 0.5, y: 0 },
+  { id: "e", x: 1, y: 0.5 },
+  { id: "s", x: 0.5, y: 1 },
+  { id: "w", x: 0, y: 0.5 },
+];
+
+/** Ports an object actually offers: its own if it stored any, else the defaults. */
+export function portsOf(object: DiagramObject): readonly PortDefinition[] {
+  return object.ports && object.ports.length > 0 ? object.ports : DEFAULT_PORTS;
+}
+
+export interface PortHit {
+  portId: string;
+  /** World position of the port, with the object's rotation already applied. */
+  point: Point;
+  distance: number;
+}
+
+/**
+ * The closest port on `object` to a world point, or null when none is within
+ * `tolerance`.
+ *
+ * Tolerance is in world units, so a caller measuring in screen pixels must
+ * divide by zoom first. A fixed world tolerance would make ports impossible to
+ * hit when zoomed out and absurdly large when zoomed in.
+ */
+export function nearestPort(
+  object: DiagramObject,
+  at: Point,
+  tolerance: number,
+): PortHit | null {
+  let best: PortHit | null = null;
+  for (const port of portsOf(object)) {
+    const point = portWorldPoint(object.transform, port);
+    const d = distance(point, at);
+    if (d <= tolerance && (best === null || d < best.distance)) {
+      best = { portId: port.id, point, distance: d };
+    }
+  }
+  return best;
 }
 
 /** Which edge or corner of an object's box a resize is dragging. */

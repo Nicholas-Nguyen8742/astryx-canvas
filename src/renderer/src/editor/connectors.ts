@@ -5,7 +5,7 @@ import type {
   DiagramObject,
   Point,
 } from "../document/model";
-import { objectBounds, portWorldPoint } from "./geometry";
+import { objectBounds, portWorldPoint, portsOf } from "./geometry";
 
 /**
  * Connector path resolution.
@@ -63,8 +63,10 @@ export function perimeterPoint(box: BoundingBox, toward: Point): Point {
 
   // A zero delta on one axis means the ray is parallel to that pair of edges and
   // never crosses them, so that axis imposes no limit.
-  const scaleX = dx === 0 ? Number.POSITIVE_INFINITY : box.width / 2 / Math.abs(dx);
-  const scaleY = dy === 0 ? Number.POSITIVE_INFINITY : box.height / 2 / Math.abs(dy);
+  const scaleX =
+    dx === 0 ? Number.POSITIVE_INFINITY : box.width / 2 / Math.abs(dx);
+  const scaleY =
+    dy === 0 ? Number.POSITIVE_INFINITY : box.height / 2 / Math.abs(dy);
   const scale = Math.min(scaleX, scaleY);
 
   return { x: centerX + dx * scale, y: centerY + dy * scale };
@@ -78,9 +80,13 @@ function resolveEndpoint(
   const object = index.get(endpoint.objectId);
 
   // An explicit port wins: the user pinned the connector to a named attachment
-  // point, and inferring a perimeter crossing would silently move it.
+  // point, and inferring a perimeter crossing would silently move it. Resolved
+  // through portsOf so a shape that stored no ports of its own still offers the
+  // cardinal defaults — a saved portId has to resolve against something.
   if (object && endpoint.portId) {
-    const port = object.ports?.find((candidate) => candidate.id === endpoint.portId);
+    const port = portsOf(object).find(
+      (candidate) => candidate.id === endpoint.portId,
+    );
     if (port) return portWorldPoint(object.transform, port);
   }
 
@@ -109,7 +115,9 @@ function format(value: number): string {
   // Trim the float noise a rotated transform produces without rounding the
   // geometry enough to be visible: 3 decimal places is a thousandth of a world
   // unit, far below a pixel at any zoom the app allows.
-  return Number.isInteger(value) ? String(value) : value.toFixed(3).replace(/\.?0+$/, "");
+  return Number.isInteger(value)
+    ? String(value)
+    : value.toFixed(3).replace(/\.?0+$/, "");
 }
 
 function straightPath(start: Point, end: Point): string {
@@ -119,7 +127,9 @@ function straightPath(start: Point, end: Point): string {
 function orthogonalPath(start: Point, end: Point): string {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
-  const mid = format(Math.abs(dx) >= Math.abs(dy) ? start.x + dx / 2 : start.y + dy / 2);
+  const mid = format(
+    Math.abs(dx) >= Math.abs(dy) ? start.x + dx / 2 : start.y + dy / 2,
+  );
 
   // Run along the dominant axis first, turn once at the midpoint, then run along
   // the other. Turning at the midpoint rather than at the corner keeps the two

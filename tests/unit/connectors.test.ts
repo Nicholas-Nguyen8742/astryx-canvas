@@ -135,6 +135,39 @@ describe("resolveConnector — anchoring", () => {
     expect(resolved!.start).toEqual({ x: 100, y: 50 });
   });
 
+  it("resolves a portId against the derived defaults when none are stored", () => {
+    // The shapes in this suite store no ports of their own, so "e" only resolves
+    // because portsOf supplies the cardinal set. Without that, a document saved
+    // before ports existed could never be wired to one.
+    const resolved = resolveConnector(
+      connector({ source: { objectId: "a", portId: "e" } }),
+      indexObjects(SIDE_BY_SIDE),
+    );
+    expect(resolved!.start).toEqual({ x: 100, y: 50 });
+  });
+
+  it("holds a pinned port still while the far shape moves, unlike a perimeter anchor", () => {
+    // The whole point of pinning. With B directly to the right, a perimeter clip
+    // and the east port agree; move B underneath A and only the pinned anchor
+    // stays put. This is the difference between an edge that stays on the side
+    // the user chose and one that swims as the diagram is rearranged.
+    const beside = [box("a", 0, 0), box("b", 300, 0)];
+    const below = [box("a", 0, 0), box("b", 0, 300)];
+    const pinned = connector({ source: { objectId: "a", portId: "e" } });
+    const loose = connector({ source: { objectId: "a" } });
+
+    const pinnedBefore = resolveConnector(pinned, indexObjects(beside))!.start;
+    const pinnedAfter = resolveConnector(pinned, indexObjects(below))!.start;
+    expect(pinnedBefore).toEqual({ x: 100, y: 50 });
+    expect(pinnedAfter).toEqual(pinnedBefore);
+
+    const looseBefore = resolveConnector(loose, indexObjects(beside))!.start;
+    const looseAfter = resolveConnector(loose, indexObjects(below))!.start;
+    expect(looseBefore).toEqual({ x: 100, y: 50 });
+    // Slides to the bottom edge once B is underneath.
+    expect(looseAfter).toEqual({ x: 50, y: 100 });
+  });
+
   it("moves a port with its object under rotation", () => {
     const rightPort: PortInstance[] = [{ id: "right", x: 1, y: 0.5 }];
     const rotated: DiagramObject = {

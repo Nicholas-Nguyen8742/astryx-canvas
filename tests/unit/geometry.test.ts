@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_PORTS,
   MAX_ZOOM,
   MIN_OBJECT_SIZE,
   MIN_ZOOM,
@@ -15,8 +16,10 @@ import {
   expandBounds,
   fitViewport,
   intersects,
+  nearestPort,
   objectBounds,
   panByScreen,
+  portsOf,
   portWorldPoint,
   resizeTransform,
   screenToWorld,
@@ -28,7 +31,13 @@ import {
   zoomAt,
   zoomAtCenter,
 } from "../../src/renderer/src/editor/geometry";
+import {
+  createObject,
+  identityTransform,
+} from "../../src/renderer/src/editor/factories";
 import type {
+  DiagramObject,
+  PortInstance,
   Transform,
   Viewport,
 } from "../../src/renderer/src/document/model";
@@ -563,6 +572,91 @@ describe("resizeTransform", () => {
           expect(result.width).toBeGreaterThanOrEqual(MIN_OBJECT_SIZE);
         }
       }
+    });
+  });
+});
+
+describe("ports", () => {
+  function shapeAt(
+    x = 0,
+    y = 0,
+    size = 100,
+    ports?: PortInstance[],
+    rotation = 0,
+  ): DiagramObject {
+    const object = createObject("rectangle", {
+      ...identityTransform(x, y, size, size),
+      rotation,
+    });
+    return ports ? { ...object, id: "s", ports } : { ...object, id: "s" };
+  }
+
+  it("offers four cardinal ports by default", () => {
+    expect(DEFAULT_PORTS.map((port) => port.id)).toEqual(["n", "e", "s", "w"]);
+    // Normalised 0..1 against the object's own box (TRD §11.3).
+    expect(DEFAULT_PORTS.map((port) => [port.x, port.y])).toEqual([
+      [0.5, 0],
+      [1, 0.5],
+      [0.5, 1],
+      [0, 0.5],
+    ]);
+  });
+
+  it("derives the defaults for an object that stored none", () => {
+    expect(portsOf(shapeAt())).toEqual(DEFAULT_PORTS);
+    expect(portsOf(shapeAt(0, 0, 100, []))).toEqual(DEFAULT_PORTS);
+  });
+
+  it("prefers the ports a document did store", () => {
+    const custom: PortInstance[] = [{ id: "mid", x: 0.5, y: 0.5 }];
+    expect(portsOf(shapeAt(0, 0, 100, custom)).map((port) => port.id)).toEqual([
+      "mid",
+    ]);
+  });
+
+  describe("nearestPort", () => {
+    const shape = shapeAt();
+
+    it("finds the port in range and reports its world position", () => {
+      const hit = nearestPort(shape, { x: 102, y: 50 }, 10);
+      expect(hit?.portId).toBe("e");
+      expect(hit?.point).toEqual({ x: 100, y: 50 });
+      expect(hit?.distance).toBeCloseTo(2, 6);
+    });
+
+    it("returns null when nothing is within tolerance", () => {
+      expect(nearestPort(shape, { x: 102, y: 50 }, 1)).toBeNull();
+      expect(nearestPort(shape, { x: 500, y: 500 }, 10)).toBeNull();
+      // Just outside the radius of the only plausible candidate.
+      expect(nearestPort(shape, { x: 111, y: 50 }, 10)).toBeNull();
+    });
+
+    it("picks the closest when several ports are in range", () => {
+      // A generous radius reaches the north, east and south ports at once; the
+      // east one is nearest and must win.
+      const hit = nearestPort(shape, { x: 96, y: 54 }, 80);
+      expect(hit?.portId).toBe("e");
+    });
+
+    it("moves the ports with a rotated object", () => {
+      const rotated = shapeAt(0, 0, 100, undefined, 90);
+      // Rotated 90 degrees about the centre, the east port lands on the bottom
+      // edge. Without the rotation being applied, snapping would aim at a point
+      // that is no longer there.
+      const hit = nearestPort(rotated, { x: 50, y: 102 }, 10);
+      expect(hit?.portId).toBe("e");
+      expect(hit?.point.x).toBeCloseTo(50, 6);
+      expect(hit?.point.y).toBeCloseTo(100, 6);
+    });
+
+    it("snaps to a stored custom port and stops offering the defaults", () => {
+      const custom: PortInstance[] = [{ id: "mid", x: 0.5, y: 0.5 }];
+      const shaped = shapeAt(0, 0, 100, custom);
+
+      expect(nearestPort(shaped, { x: 52, y: 50 }, 10)?.portId).toBe("mid");
+      // The east port is no longer a candidate at all, so a click exactly on it
+      // must not snap to something the shape does not offer.
+      expect(nearestPort(shaped, { x: 100, y: 50 }, 5)).toBeNull();
     });
   });
 });
