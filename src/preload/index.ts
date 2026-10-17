@@ -12,7 +12,10 @@ import {
   type LogRecord,
   type MessageOptions,
   type OpenDocumentResult,
+  type PdfPrintRequest,
   type RecentFile,
+  type SaveBlobRequest,
+  type SaveBlobResult,
   type SaveDocumentRequest,
   type SaveDocumentResult,
   type WriteDocumentRequest,
@@ -25,7 +28,10 @@ import {
  * sides are generated from the same `DesktopApi` contract in `src/shared/ipc.ts`.
  * No raw `ipcRenderer`, `require`, `process` or `fs` is ever handed over.
  */
-function invoke<TValue>(channel: string, ...args: unknown[]): Promise<IpcResult<TValue>> {
+function invoke<TValue>(
+  channel: string,
+  ...args: unknown[]
+): Promise<IpcResult<TValue>> {
   return ipcRenderer.invoke(channel, ...args) as Promise<IpcResult<TValue>>;
 }
 
@@ -34,14 +40,16 @@ const desktopApi: DesktopApi = {
     getInfo: () => invoke<AppInfo>(IpcChannel.AppGetInfo),
   },
   dialog: {
-    openDocument: () => invoke<OpenDocumentResult>(IpcChannel.DialogOpenDocument),
+    openDocument: () =>
+      invoke<OpenDocumentResult>(IpcChannel.DialogOpenDocument),
     saveDocument: (request: SaveDocumentRequest) =>
       invoke<SaveDocumentResult>(IpcChannel.DialogSaveDocument, request),
     showMessage: (options: MessageOptions) =>
       invoke<void>(IpcChannel.DialogMessage, options),
   },
   document: {
-    read: (filePath: string) => invoke<string>(IpcChannel.DocumentRead, { filePath }),
+    read: (filePath: string) =>
+      invoke<string>(IpcChannel.DocumentRead, { filePath }),
     write: (request: WriteDocumentRequest) =>
       invoke<void>(IpcChannel.DocumentWrite, request),
   },
@@ -55,11 +63,20 @@ const desktopApi: DesktopApi = {
       invoke<void>(IpcChannel.AutosaveWrite, request),
     read: (documentId: string) =>
       invoke<AutosaveReadResult | null>(IpcChannel.AutosaveRead, documentId),
-    clear: (documentId: string) => invoke<void>(IpcChannel.AutosaveClear, documentId),
+    clear: (documentId: string) =>
+      invoke<void>(IpcChannel.AutosaveClear, documentId),
   },
   shell: {
     showItemInFolder: (path: string) =>
       invoke<void>(IpcChannel.ShellShowItemInFolder, path),
+  },
+  export: {
+    saveBlob: (request: SaveBlobRequest) =>
+      invoke<SaveBlobResult>(IpcChannel.ExportSaveBlob, request),
+  },
+  pdf: {
+    printToPdf: (request: PdfPrintRequest) =>
+      invoke<ArrayBuffer>(IpcChannel.PdfPrintToPdf, request),
   },
   log: (record: LogRecord) => invoke<void>(IpcChannel.LogWrite, record),
 };

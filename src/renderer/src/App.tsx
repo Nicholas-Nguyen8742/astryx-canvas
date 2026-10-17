@@ -16,7 +16,12 @@ import { Text } from "@astryxdesign/core/Text";
 import { Theme } from "@astryxdesign/core/theme";
 import { VStack } from "@astryxdesign/core/VStack";
 
-import type { AppInfo, AutosaveEntry, RecentFile } from "../../shared/ipc";
+import type {
+  AppInfo,
+  AutosaveEntry,
+  ExportFormat,
+  RecentFile,
+} from "../../shared/ipc";
 import { astryxTheme } from "./design-system/astryx-theme";
 import {
   UNTITLED_DOCUMENT_TITLE,
@@ -26,6 +31,7 @@ import type { ThemeMode } from "./document/model";
 import { parseDocument } from "./document/validate";
 import { canvasEngine } from "./editor/canvas/adapter";
 import { SvgCanvas } from "./editor/canvas/SvgCanvas";
+import { ExportError, exportDiagram } from "./export";
 import { fitViewport, zoomAtCenter } from "./editor/geometry";
 import { useDocumentStore } from "./state/document-store";
 import { useEditorStore, type ActiveTool } from "./state/editor-store";
@@ -51,6 +57,14 @@ const TOOLS: readonly { tool: ActiveTool; label: string }[] = [
   { tool: "line", label: "Line" },
   { tool: "arrow", label: "Arrow" },
   { tool: "pan", label: "Pan" },
+];
+
+/** Formats offered in the rail (FR-EXP-01/02/03/04). WebP remains a COULD. */
+const EXPORT_FORMATS: readonly { format: ExportFormat; label: string }[] = [
+  { format: "svg", label: "Export SVG" },
+  { format: "png", label: "Export PNG" },
+  { format: "jpeg", label: "Export JPEG" },
+  { format: "pdf", label: "Export PDF" },
 ];
 
 /** FR-CANVAS-03: one toolbar step, matching a ctrl+wheel notch. */
@@ -290,6 +304,54 @@ export function App(): React.JSX.Element {
     useEditorStore.getState().toggleGrid();
   }, []);
 
+  /**
+   * FR-EXP-01..04. An export failure surfaces as a message the user can act on
+   * (FR-EXP-18) — an empty canvas, a refused save, or a raster too large to
+   * allocate all need different responses, and none of them is a stack trace.
+   */
+  const handleExport = useCallback(
+    async (format: ExportFormat): Promise<void> => {
+      if (!desktop) return;
+      const doc = useDocumentStore.getState();
+      const page = doc.document.pages.find(
+        (entry) => entry.id === doc.activePageId,
+      );
+
+      try {
+        const outcome = await exportDiagram(
+          desktop,
+          page?.objects ?? [],
+          useEditorStore.getState().selection,
+          doc.document.meta.title,
+          { format },
+        );
+        if (outcome.canceled) {
+          setStatus({ kind: "info", text: "Export cancelled." });
+          return;
+        }
+        const kilobytes = Math.max(1, Math.round(outcome.bytes / 1024));
+        setStatus({
+          kind: "info",
+          text: `Exported ${format.toUpperCase()} to ${outcome.filePath} (${kilobytes} kB).`,
+        });
+      } catch (cause) {
+        const message =
+          cause instanceof ExportError
+            ? cause.message
+            : cause instanceof Error
+              ? cause.message
+              : "Export failed for an unknown reason.";
+        setStatus({ kind: "error", text: message });
+        await desktop.dialog.showMessage({
+          kind: "error",
+          title: "Export failed",
+          message,
+        });
+      }
+    },
+    [desktop],
+  );
+
   const selectTool = useCallback((tool: ActiveTool): void => {
     useEditorStore.getState().setTool(tool);
   }, []);
@@ -447,6 +509,19 @@ export function App(): React.JSX.Element {
                 />
               </VStack>
 
+              <Heading level={5}>Export</Heading>
+              <VStack gap={1}>
+                {EXPORT_FORMATS.map((entry) => (
+                  <Button
+                    key={entry.format}
+                    label={entry.label}
+                    size="sm"
+                    width="100%"
+                    clickAction={() => handleExport(entry.format)}
+                  />
+                ))}
+              </VStack>
+
               <Heading level={5}>Recent</Heading>
               {recentFiles.length === 0 ? (
                 <Text type="supporting" color="secondary">
@@ -511,7 +586,9 @@ export function App(): React.JSX.Element {
                   type="body"
                   color="secondary"
                   className={
-                    status.kind === "error" ? "status-error" : undefined
+                    status.kind === "error"
+                      ? "status-message status-error"
+                      : "status-message"
                   }
                 >
                   {status.text}

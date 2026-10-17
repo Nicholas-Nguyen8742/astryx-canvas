@@ -10,13 +10,19 @@ import {
   type AppInfo,
   type AutosaveEntry,
   type AutosaveReadResult,
+  type ExportFormat,
   type IpcErrorCode,
   type IpcResult,
   type LogLevel,
   type MessageKind,
   type MessageOptions,
   type OpenDocumentResult,
+  type PdfOrientation,
+  type PdfPageSize,
+  type PdfPrintRequest,
   type RecentFile,
+  type SaveBlobRequest,
+  type SaveBlobResult,
   type SaveDocumentRequest,
   type SaveDocumentResult,
   type WriteDocumentRequest,
@@ -24,7 +30,8 @@ import {
 import type { FileLogger } from "./logger";
 import { appPaths } from "./paths";
 import { grantFile, grantRoot, isPathGranted } from "./path-guard";
-import { atomicWriteText } from "./atomic-write";
+import { atomicWriteBuffer, atomicWriteText } from "./atomic-write";
+import { renderSvgToPdf } from "./pdf";
 import { addRecent, listRecent, removeRecent } from "./store-recent";
 import {
   clearAutosave,
@@ -72,6 +79,44 @@ const LOG_LEVELS = [
   "info",
   "debug",
 ] as const satisfies readonly LogLevel[];
+
+const EXPORT_FORMATS = [
+  "svg",
+  "png",
+  "jpeg",
+  "pdf",
+] as const satisfies readonly ExportFormat[];
+const PDF_PAGE_SIZES = [
+  "A3",
+  "A4",
+  "Letter",
+  "Legal",
+] as const satisfies readonly PdfPageSize[];
+const PDF_ORIENTATIONS = [
+  "portrait",
+  "landscape",
+] as const satisfies readonly PdfOrientation[];
+
+const EXPORT_EXTENSIONS: Record<ExportFormat, string> = {
+  svg: "svg",
+  png: "png",
+  jpeg: "jpg",
+  pdf: "pdf",
+};
+
+/**
+ * The document title becomes part of a suggested file path here, and it is
+ * user-authored, so separators and characters reserved on any of the three
+ * target platforms have to be stripped rather than trusted (NFR-SEC-06).
+ * A title of "../../etc/passwd" must not escape the documents folder.
+ */
+function sanitiseFileName(name: string): string {
+  const cleaned = name
+    .replace(/[\\/:*?"<>|\u0000-\u001F]/g, "-")
+    .replace(/^\.+/, "")
+    .trim();
+  return cleaned.length > 0 ? cleaned.slice(0, 120) : "export";
+}
 
 /**
  * Narrows an arbitrary IPC string to one of a fixed set of literals. TypeScript
@@ -330,6 +375,74 @@ export function registerIpcHandlers({
   wrap<void>(IpcChannel.ShellShowItemInFolder, async (args) => {
     const filePath = assertGranted(requireString(args, "path"));
     shell.showItemInFolder(filePath);
+  });
+
+  wrap<SaveBlobResult>(IpcChannel.ExportSaveBlob, async (args) => {
+    const request = asRecord(args) as unknown as Partial<SaveBlobRequest>;
+    const suggestedName = requireString(request.suggestedName, "suggestedName");
+    const format = requireEnum(request.format, EXPORT_FORMATS, "export format");
+
+    // Structured clone delivers binary as a real ArrayBuffer; anything else
+    // means a caller bug, and silently coercing it would write garbage to disk.
+    const payload = request.data;
+    if (!(payload instanceof ArrayBuffer)) {
+      throw new InvalidArgument("Export payload must be an ArrayBuffer.");
+    }
+
+    const extension = EXPORT_EXTENSIONS[format];
+    const parent = getWindow();
+    const options = {
+      title: `Export as ${format.toUpperCase()}`,
+      defaultPath: resolve(
+        app.getPath("documents"),
+        `${sanitiseFileName(suggestedName)}.${extension}`,
+      ),
+      filters: [
+        { name: `${format.toUpperCase()} file`, extensions: [extension] },
+      ],
+    };
+    const result = parent
+      ? await dialog.showSaveDialog(parent, options)
+      : await dialog.showSaveDialog(options);
+
+    if (result.canceled || !result.filePath) {
+      return { canceled: true, filePath: null };
+    }
+
+    const filePath = resolve(result.filePath);
+    grantFile(filePath);
+    await atomicWriteBuffer(filePath, new Uint8Array(payload));
+    logger.info("Exported diagram", {
+      path: filePath,
+      format,
+      bytes: payload.byteLength,
+    });
+    return { canceled: false, filePath };
+  });
+
+  wrap<ArrayBuffer>(IpcChannel.PdfPrintToPdf, async (args) => {
+    const request = asRecord(args) as unknown as Partial<PdfPrintRequest>;
+    const svg = requireString(request.svg, "svg");
+    const pageSize = requireEnum(request.pageSize, PDF_PAGE_SIZES, "page size");
+    const orientation = requireEnum(
+      request.orientation,
+      PDF_ORIENTATIONS,
+      "orientation",
+    );
+    const marginPoints =
+      typeof request.marginPoints === "number" &&
+      Number.isFinite(request.marginPoints)
+        ? Math.max(request.marginPoints, 0)
+        : 0;
+
+    const pdf = await renderSvgToPdf(svg, {
+      pageSize,
+      orientation,
+      marginPoints,
+    });
+    // Copy out of the Buffer so the renderer gets a plain, exactly-sized
+    // ArrayBuffer instead of a view into Node's shared allocation pool.
+    return new Uint8Array(pdf).buffer;
   });
 
   wrap<void>(IpcChannel.LogWrite, async (args) => {

@@ -20,6 +20,8 @@ export const IpcChannel = {
   AutosaveRead: "autosave:read",
   AutosaveClear: "autosave:clear",
   ShellShowItemInFolder: "shell:show-item-in-folder",
+  ExportSaveBlob: "export:save-blob",
+  PdfPrintToPdf: "pdf:print-to-pdf",
   LogWrite: "log:write",
 } as const;
 
@@ -123,11 +125,42 @@ export interface LogRecord {
   context?: Record<string, unknown>;
 }
 
+/** Export formats the save dialog offers (FR-EXP-02/03/04/05). */
+export type ExportFormat = "svg" | "png" | "jpeg" | "pdf";
+
+export interface SaveBlobRequest {
+  suggestedName: string;
+  format: ExportFormat;
+  /**
+   * Transferred as an ArrayBuffer rather than base64 (TRD §17.2 rule 6): a 4K
+   * raster is megabytes, and base64 would inflate it by a third on top of a
+   * string copy through the bridge.
+   */
+  data: ArrayBuffer;
+}
+
+export interface SaveBlobResult {
+  canceled: boolean;
+  filePath: string | null;
+}
+
+/** TRD FR-EXP-07/08/09. */
+export type PdfPageSize = "A3" | "A4" | "Letter" | "Legal";
+export type PdfOrientation = "portrait" | "landscape";
+
+export interface PdfPrintRequest {
+  /** Standalone SVG markup, generated in the renderer by the canvas engine. */
+  svg: string;
+  pageSize: PdfPageSize;
+  orientation: PdfOrientation;
+  /** Page margin in points (1/72 inch). */
+  marginPoints: number;
+}
+
 /**
- * The single surface exposed on `window.astryxDesktop` (TRD §17.1). Deliberately
- * narrower than the full contract: `export`, `pdf` and `clipboard` arrive with the
- * export subsystem, and nothing here hands the renderer a raw path it did not
- * already receive from a dialog or from our own stores.
+ * The single surface exposed on `window.astryxDesktop` (TRD §17.1). Nothing here
+ * hands the renderer a raw path it did not already receive from a dialog or from
+ * our own stores.
  */
 export interface DesktopApi {
   app: {
@@ -156,6 +189,12 @@ export interface DesktopApi {
   };
   shell: {
     showItemInFolder(path: string): Promise<IpcResult<void>>;
+  };
+  export: {
+    saveBlob(request: SaveBlobRequest): Promise<IpcResult<SaveBlobResult>>;
+  };
+  pdf: {
+    printToPdf(request: PdfPrintRequest): Promise<IpcResult<ArrayBuffer>>;
   };
   log: (record: LogRecord) => Promise<IpcResult<void>>;
 }
