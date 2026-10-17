@@ -3,6 +3,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type WheelEvent as ReactWheelEvent,
 } from "react";
@@ -25,6 +26,7 @@ import {
   DeleteObjectsCommand,
   MoveObjectsCommand,
   ResizeObjectCommand,
+  UpdateContentCommand,
 } from "../commands/object-commands";
 import { copyObjects, pasteObjects } from "../clipboard";
 import { useDocumentStore } from "../../state/document-store";
@@ -35,6 +37,7 @@ import {
   type ResizeHandle,
 } from "../../state/editor-store";
 import { ARROW_MARKER_ID, lineEndpoints, shapeGeometry } from "./shape-attrs";
+import { TextEditorOverlay } from "./TextEditorOverlay";
 
 /** Handle edge length in screen pixels, so handles stay grabbable at any zoom. */
 const HANDLE_SCREEN_SIZE = 8;
@@ -235,6 +238,7 @@ export function SvgCanvas() {
   const grid = useEditorStore((state) => state.grid);
   const interaction = useEditorStore((state) => state.interaction);
   const hoveredId = useEditorStore((state) => state.hoveredId);
+  const editingId = useEditorStore((state) => state.editingId);
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -656,6 +660,63 @@ export function SvgCanvas() {
         ? "crosshair"
         : "default";
 
+  const editingObject = editingId
+    ? objects.find(
+        (object) => object.id === editingId && object.type === "text",
+      )
+    : undefined;
+
+  /**
+   * Double-click starts an inline label edit (FR-TEXT-02). Restricted to text
+   * objects: a shape can carry a label in the document model, but nothing renders
+   * one yet, so editing a shape's label would change data the user cannot see.
+   */
+  const onDoubleClick = (event: ReactMouseEvent<SVGSVGElement>) => {
+    // `event.target` cannot be trusted here. The pointerdown that preceded this
+    // double-click called setPointerCapture on the <svg>, and while capture is
+    // active the browser retargets compatibility mouse events (click, dblclick)
+    // to the capturing element — so target is always the <svg>, never the shape.
+    // Hit-testing the coordinates goes through the layout instead and is
+    // unaffected by capture. (onPointerDown does not have this problem: it reads
+    // target before requesting capture.)
+    const objectId =
+      document
+        .elementsFromPoint(event.clientX, event.clientY)
+        .map((element) => element.closest("[data-object-id]"))
+        .find((element): element is Element => element !== null)
+        ?.getAttribute("data-object-id") ?? null;
+
+    if (!objectId) return;
+
+    const object = objects.find((candidate) => candidate.id === objectId);
+    if (!object || object.locked || !object.visible || object.type !== "text")
+      return;
+
+    const editor = useEditorStore.getState();
+    editor.setSelection([objectId]);
+    editor.setEditing(objectId);
+  };
+
+  const handleTextCommit = useCallback((value: string) => {
+    const editor = useEditorStore.getState();
+    const id = editor.editingId;
+    editor.setEditing(null);
+    if (!id) return;
+
+    const doc = useDocumentStore.getState();
+    const from = doc.getContents([id]);
+    // An unchanged label must not create an undo entry.
+    if ((from[id]?.value ?? "") === value) return;
+
+    useHistoryStore
+      .getState()
+      .execute(new UpdateContentCommand(doc, [id], from, { [id]: { value } }));
+  }, []);
+
+  const handleTextCancel = useCallback(() => {
+    useEditorStore.getState().setEditing(null);
+  }, []);
+
   return (
     <div ref={containerRef} className="canvas-host">
       <svg
@@ -667,6 +728,7 @@ export function SvgCanvas() {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        onDoubleClick={onDoubleClick}
         onWheel={onWheel}
       >
         <defs>
@@ -792,6 +854,15 @@ export function SvgCanvas() {
           />
         ) : null}
       </svg>
+
+      {editingObject ? (
+        <TextEditorOverlay
+          object={editingObject}
+          viewport={viewport}
+          onCommit={handleTextCommit}
+          onCancel={handleTextCancel}
+        />
+      ) : null}
     </div>
   );
 }

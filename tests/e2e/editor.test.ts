@@ -511,6 +511,90 @@ describe("Astryx Architecture Canvas — editing journey", () => {
     expect(bytes.byteLength).toBeGreaterThan(100);
   });
 
+  /** Draws a text object and returns a locator for its rendered SVG label. */
+  async function drawText(): Promise<ReturnType<Page["locator"]>> {
+    await window.getByRole("button", { name: "Text", exact: true }).click();
+    const box = await canvasBox();
+    await drag(
+      { x: box.x + 200, y: box.y + 150 },
+      { x: box.x + 420, y: box.y + 210 },
+    );
+    await waitFor(
+      async () => (await objectCount()) >= 1,
+      "a text object to appear",
+    );
+    return window.locator("svg text[data-object-id]").first();
+  }
+
+  async function openInlineEditor(): Promise<ReturnType<Page["locator"]>> {
+    const label = window.locator("svg text[data-object-id]").first();
+    const box = await label.boundingBox();
+    if (!box) throw new Error("The text object reported no bounding box.");
+    await window.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
+
+    const editor = window.locator(".canvas-host textarea");
+    await waitFor(
+      async () => (await editor.count()) === 1,
+      "the inline editor to open",
+    );
+    return editor;
+  }
+
+  /** SVG has no innerText semantics that matter here; textContent works on any node. */
+  async function labelText(): Promise<string> {
+    return (
+      (await window
+        .locator("svg text[data-object-id]")
+        .first()
+        .textContent()) ?? ""
+    ).trim();
+  }
+
+  it("edits a text label inline and undoes it as one step", async () => {
+    const label = await drawText();
+    // The factory seeds a placeholder label.
+    expect(((await label.textContent()) ?? "").trim()).toBe("Text");
+
+    const editor = await openInlineEditor();
+    await editor.fill("Auth Service");
+
+    // Blurring commits (FR-TEXT-02).
+    await window
+      .locator(".canvas-host svg")
+      .click({ position: { x: 4, y: 4 } });
+    await waitFor(
+      async () => (await window.locator(".canvas-host textarea").count()) === 0,
+      "the inline editor to close",
+    );
+    await waitFor(
+      async () => (await labelText()).includes("Auth Service"),
+      "the new label to render on the canvas",
+    );
+
+    // Coalescing: one undo returns to the original label, not one keystroke back.
+    await window.keyboard.press("Control+z");
+    await waitFor(
+      async () => (await labelText()) === "Text",
+      "undo to restore the label",
+    );
+  });
+
+  it("cancels an inline edit on Escape without committing it", async () => {
+    await drawText();
+    const editor = await openInlineEditor();
+
+    await editor.fill("Discarded");
+    await editor.press("Escape");
+
+    await waitFor(
+      async () => (await window.locator(".canvas-host textarea").count()) === 0,
+      "the inline editor to close",
+    );
+    // Cancelling unmounts the textarea, which fires blur; a missing guard here
+    // would commit the very draft the user just rejected.
+    expect(await labelText()).toBe("Text");
+  });
+
   // Runs last: a failure here means one of the journeys above threw inside React.
   it("produces no renderer errors across the whole journey", () => {
     expect(pageErrors.map((error) => error.message)).toEqual([]);

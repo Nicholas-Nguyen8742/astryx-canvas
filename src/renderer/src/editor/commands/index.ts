@@ -1,4 +1,9 @@
-import type { DiagramObject, DiagramStyle, Transform } from "../../document/model";
+import type {
+  DiagramObject,
+  DiagramStyle,
+  TextContent,
+  Transform,
+} from "../../document/model";
 
 /**
  * An object plus the array index it occupied, so a delete can be undone back
@@ -26,6 +31,12 @@ export interface DocumentMutator {
   setStyles(entries: Readonly<Record<string, DiagramStyle>>): void;
   getTransforms(ids: readonly string[]): Record<string, Transform>;
   getStyles(ids: readonly string[]): Record<string, DiagramStyle>;
+  /**
+   * `undefined` as a value clears the label rather than leaving it untouched —
+   * the two are distinguishable because lookup is by key presence, not by value.
+   */
+  setContents(entries: Readonly<Record<string, TextContent | undefined>>): void;
+  getContents(ids: readonly string[]): Record<string, TextContent | undefined>;
 }
 
 /**

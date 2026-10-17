@@ -92,6 +92,12 @@ export interface EditorState {
   clipboard: DiagramObject[];
   /** How many pastes have happened since the last copy, so copies cascade. */
   pasteStep: number;
+  /**
+   * The object whose label is being edited inline (FR-TEXT-02), or null. Held in
+   * the store rather than in local component state so the overlay, the canvas key
+   * handler and the commit path all agree on what is being edited.
+   */
+  editingId: string | null;
 
   setTool(tool: ActiveTool): void;
   setSelection(ids: readonly string[]): void;
@@ -109,6 +115,7 @@ export interface EditorState {
   setClipboard(objects: readonly DiagramObject[]): void;
   /** Returns the step to use for this paste, then advances the cascade. */
   nextPasteStep(): number;
+  setEditing(id: string | null): void;
 }
 
 export function createEditorStore() {
@@ -123,11 +130,13 @@ export function createEditorStore() {
     interaction: null,
     clipboard: [],
     pasteStep: 0,
+    editingId: null,
 
     setTool(tool) {
       // Leaving a drawing tool clears any half-finished gesture so a stale
-      // interaction cannot be resumed by the next pointer down.
-      set({ activeTool: tool, interaction: null });
+      // interaction cannot be resumed by the next pointer down. Switching tools
+      // also ends an inline text edit, which belongs to select mode.
+      set({ activeTool: tool, interaction: null, editingId: null });
     },
 
     setClipboard(objects) {
@@ -140,6 +149,10 @@ export function createEditorStore() {
       const step = get().pasteStep + 1;
       set({ pasteStep: step });
       return step;
+    },
+
+    setEditing(id) {
+      set({ editingId: id });
     },
 
     setSelection(ids) {

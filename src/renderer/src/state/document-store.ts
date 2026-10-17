@@ -5,6 +5,7 @@ import type {
   DiagramObject,
   DiagramStyle,
   DocumentMeta,
+  TextContent,
   Transform,
   Viewport,
 } from "../document/model";
@@ -178,6 +179,27 @@ export function createDocumentStore(
         const result: Record<string, DiagramStyle> = {};
         for (const object of activeObjects()) {
           if (wanted.has(object.id)) result[object.id] = object.style;
+        }
+        return result;
+      },
+
+      setContents(entries) {
+        mutateObjects((objects) =>
+          objects.map((object) =>
+            // Key presence, not truthiness: an explicit `undefined` clears a
+            // label, which is a different operation from leaving it alone.
+            object.id in entries
+              ? { ...object, content: entries[object.id] }
+              : object,
+          ),
+        );
+      },
+
+      getContents(ids) {
+        const wanted = new Set(ids);
+        const result: Record<string, TextContent | undefined> = {};
+        for (const object of activeObjects()) {
+          if (wanted.has(object.id)) result[object.id] = object.content;
         }
         return result;
       },

@@ -47,6 +47,9 @@ body {
 }
 
 .canvas-host {
+    /* Anchor for the inline text editor overlay, which is positioned in screen
+       pixels derived from the object's world transform. */
+    position: relative;
     height: 100%;
     min-height: 0;
     overflow: hidden;

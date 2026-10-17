@@ -1,6 +1,7 @@
 import type {
   DiagramObject,
   DiagramStyle,
+  TextContent,
   Transform,
 } from "../../document/model";
 import type { DocumentMutator, EditorCommand, ExtractedObject } from "./index";
@@ -156,6 +157,42 @@ export class UpdateStyleCommand implements EditorCommand {
 
   merge(previous: EditorCommand): boolean {
     if (!(previous instanceof UpdateStyleCommand)) return false;
+    if (!sameIdSet(previous.ids, this.ids)) return false;
+    previous.to = this.to;
+    return true;
+  }
+}
+
+/**
+ * Inline label edits (FR-TEXT-02).
+ *
+ * Coalescing matters more here than for any other command: without `merge`,
+ * typing a twelve-character label would push twelve undo entries and burn through
+ * the history limit inside a single field (FR-HIST-04). With it, one edit session
+ * is one undo step that returns to whatever the label was before typing began.
+ */
+export class UpdateContentCommand implements EditorCommand {
+  readonly id = nextCommandId("content");
+  readonly label = "Edit text";
+  readonly timestamp = new Date().toISOString();
+
+  constructor(
+    private readonly mutator: DocumentMutator,
+    private readonly ids: readonly string[],
+    private readonly from: Readonly<Record<string, TextContent | undefined>>,
+    private to: Readonly<Record<string, TextContent | undefined>>,
+  ) {}
+
+  execute(): void {
+    this.mutator.setContents(this.to);
+  }
+
+  undo(): void {
+    this.mutator.setContents(this.from);
+  }
+
+  merge(previous: EditorCommand): boolean {
+    if (!(previous instanceof UpdateContentCommand)) return false;
     if (!sameIdSet(previous.ids, this.ids)) return false;
     previous.to = this.to;
     return true;

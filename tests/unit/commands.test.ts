@@ -5,6 +5,7 @@ import {
   DeleteObjectsCommand,
   MoveObjectsCommand,
   ResizeObjectCommand,
+  UpdateContentCommand,
   UpdateStyleCommand,
 } from "../../src/renderer/src/editor/commands/object-commands";
 import {
@@ -190,6 +191,84 @@ describe("object commands", () => {
     expect(store.getState().getStyles(["a"]).a?.strokeWidth).toBe(
       before.strokeWidth,
     );
+  });
+
+  it("UpdateContentCommand restores the previous label", () => {
+    const text: DiagramObject = {
+      ...makeObject("label"),
+      type: "text",
+      content: { value: "Before" },
+    };
+    store.getState().insertObjects([text]);
+
+    const from = store.getState().getContents(["label"]);
+    const command = new UpdateContentCommand(
+      store.getState(),
+      ["label"],
+      from,
+      {
+        label: { value: "After" },
+      },
+    );
+
+    command.execute();
+    expect(store.getState().getContents(["label"]).label?.value).toBe("After");
+    command.undo();
+    expect(store.getState().getContents(["label"]).label?.value).toBe("Before");
+  });
+
+  it("UpdateContentCommand clears a label on an explicit undefined", () => {
+    const text: DiagramObject = {
+      ...makeObject("label"),
+      type: "text",
+      content: { value: "Before" },
+    };
+    store.getState().insertObjects([text]);
+
+    const from = store.getState().getContents(["label"]);
+    const command = new UpdateContentCommand(
+      store.getState(),
+      ["label"],
+      from,
+      {
+        label: undefined,
+      },
+    );
+
+    command.execute();
+    // Clearing a label and leaving it untouched must be different operations.
+    expect(store.getState().getContents(["label"]).label).toBeUndefined();
+    command.undo();
+    expect(store.getState().getContents(["label"]).label?.value).toBe("Before");
+  });
+
+  it("coalesces consecutive label edits so typing is a single undo step", () => {
+    const text: DiagramObject = {
+      ...makeObject("label"),
+      type: "text",
+      content: { value: "" },
+    };
+    store.getState().insertObjects([text]);
+
+    const first = new UpdateContentCommand(
+      store.getState(),
+      ["label"],
+      { label: { value: "" } },
+      { label: { value: "A" } },
+    );
+    const second = new UpdateContentCommand(
+      store.getState(),
+      ["label"],
+      { label: { value: "A" } },
+      { label: { value: "AB" } },
+    );
+
+    expect(second.merge(first)).toBe(true);
+    first.execute();
+    expect(store.getState().getContents(["label"]).label?.value).toBe("AB");
+    // One undo returns to the pre-typing label, not one keystroke back.
+    first.undo();
+    expect(store.getState().getContents(["label"]).label?.value).toBe("");
   });
 
   it("labels commands with a user-facing count for the Edit menu", () => {
