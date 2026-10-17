@@ -275,15 +275,19 @@ end; anchoring to a port, with the four cardinal ports derived for any shape
 that stores none and snap targets shown while wiring; falling back to the
 shape's perimeter when a click misses every port; fallback points for endpoints
 whose object is gone; labels drawn on both the canvas and in export, and
-editable inline by double-click; independent selection; deleting a connector on
-its own; deleting a shape cascading to its edges; undo/redo across all of it;
-and identical rendering on the live canvas and in SVG, PNG, JPEG and PDF export.
+editable inline by double-click; independent selection, shown by a draggable
+handle on each end; **re-attaching either end by dragging it** onto another
+shape or port, which cancels rather than detaching when dropped on empty
+canvas; deleting a connector on its own; deleting a shape cascading to its
+edges; undo/redo across all of it; and identical rendering on the live canvas
+and in SVG, PNG, JPEG and PDF export.
 
 **Not implemented:**
 
-- **Endpoints cannot be re-attached.** There is no dragging of an existing
-  edge's ends onto a different shape or port, and no waypoint editing for
-  orthogonal routes. A mis-wired edge has to be deleted and redrawn.
+- **No waypoint editing.** An orthogonal route always turns once, at the
+  midpoint of its dominant axis. There is no way to add a bend or drag the
+  existing one, so a route that crosses a shape cannot be steered around it.
+  Re-attaching an end is implemented; steering the middle of the path is not.
 - **No connector styling UI.** Routing and arrowheads are reachable only through
   the document format, not the app. `DocumentSettings.connectorDefaults` is
   preserved on save but is not consulted when a connector is created, so a
