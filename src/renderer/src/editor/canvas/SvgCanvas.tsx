@@ -26,6 +26,7 @@ import {
   MoveObjectsCommand,
   ResizeObjectCommand,
 } from "../commands/object-commands";
+import { copyObjects, pasteObjects } from "../clipboard";
 import { useDocumentStore } from "../../state/document-store";
 import { useHistoryStore } from "../../state/history-store";
 import {
@@ -298,6 +299,48 @@ export function SvgCanvas() {
           .map((object) => object.id);
         useEditorStore.getState().setSelection(selectable);
         return;
+      }
+
+      // Clipboard (FR-OBJ-16) and duplicate (FR-OBJ-05). Also ahead of the
+      // empty-selection guard: paste is the one clipboard action that runs with
+      // nothing selected.
+      if (event.ctrlKey || event.metaKey) {
+        const editor = useEditorStore.getState();
+        const page = doc.document.pages.find((p) => p.id === doc.activePageId);
+        const pageObjects = page?.objects ?? [];
+        const key = event.key.toLowerCase();
+
+        if (key === "c" || key === "x") {
+          const ids = editor.selection;
+          if (ids.length === 0) return;
+          editor.setClipboard(copyObjects(pageObjects, ids));
+          if (key === "x") {
+            hist.execute(new DeleteObjectsCommand(doc, ids));
+            editor.setSelection([]);
+          }
+          event.preventDefault();
+          return;
+        }
+
+        if (key === "v") {
+          if (editor.clipboard.length === 0) return;
+          const pasted = pasteObjects(editor.clipboard, editor.nextPasteStep());
+          hist.execute(new CreateObjectsCommand(doc, pasted));
+          editor.setSelection(pasted.map((object) => object.id));
+          event.preventDefault();
+          return;
+        }
+
+        if (key === "d" && !event.shiftKey) {
+          const ids = editor.selection;
+          if (ids.length === 0) return;
+          // Duplicate is copy plus paste in one step, and deliberately leaves the
+          // clipboard alone so a later Ctrl+V still yields the original copy.
+          const duplicates = pasteObjects(copyObjects(pageObjects, ids), 1);
+          hist.execute(new CreateObjectsCommand(doc, duplicates));
+          editor.setSelection(duplicates.map((object) => object.id));
+          event.preventDefault();
+        }
       }
 
       const currentSelection = useEditorStore.getState().selection;

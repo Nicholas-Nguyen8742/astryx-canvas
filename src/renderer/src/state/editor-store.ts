@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import type {
+  DiagramObject,
   GridSettings,
   Point,
   Transform,
@@ -83,6 +84,14 @@ export interface EditorState {
   grid: GridSettings;
   cursorWorld: Point | null;
   interaction: Interaction | null;
+  /**
+   * Detached copies awaiting paste (FR-OBJ-16). These are plain data, not
+   * references into the document, so deleting the originals after a cut cannot
+   * invalidate what a later paste inserts.
+   */
+  clipboard: DiagramObject[];
+  /** How many pastes have happened since the last copy, so copies cascade. */
+  pasteStep: number;
 
   setTool(tool: ActiveTool): void;
   setSelection(ids: readonly string[]): void;
@@ -97,6 +106,9 @@ export interface EditorState {
   toggleGrid(): void;
   setCursorWorld(point: Point | null): void;
   setInteraction(interaction: Interaction | null): void;
+  setClipboard(objects: readonly DiagramObject[]): void;
+  /** Returns the step to use for this paste, then advances the cascade. */
+  nextPasteStep(): number;
 }
 
 export function createEditorStore() {
@@ -109,11 +121,25 @@ export function createEditorStore() {
     grid: DEFAULT_GRID,
     cursorWorld: null,
     interaction: null,
+    clipboard: [],
+    pasteStep: 0,
 
     setTool(tool) {
       // Leaving a drawing tool clears any half-finished gesture so a stale
       // interaction cannot be resumed by the next pointer down.
       set({ activeTool: tool, interaction: null });
+    },
+
+    setClipboard(objects) {
+      // A fresh copy restarts the cascade, so the first paste sits one step
+      // away from the original rather than continuing an earlier run.
+      set({ clipboard: [...objects], pasteStep: 0 });
+    },
+
+    nextPasteStep() {
+      const step = get().pasteStep + 1;
+      set({ pasteStep: step });
+      return step;
     },
 
     setSelection(ids) {
