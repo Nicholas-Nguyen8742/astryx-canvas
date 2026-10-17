@@ -32,7 +32,8 @@ import { parseDocument } from "./document/validate";
 import { canvasEngine } from "./editor/canvas/adapter";
 import { SvgCanvas } from "./editor/canvas/SvgCanvas";
 import { ExportError, exportDiagram } from "./export";
-import { fitViewport, zoomAtCenter } from "./editor/geometry";
+import { ExportDialog, type ExportOptions } from "./components/ExportDialog";
+import { fitViewport, screenToWorld, zoomAtCenter } from "./editor/geometry";
 import { useDocumentStore } from "./state/document-store";
 import { useEditorStore, type ActiveTool } from "./state/editor-store";
 import { useHistoryStore } from "./state/history-store";
@@ -103,6 +104,8 @@ export function App(): React.JSX.Element {
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>([]);
   const [recovery, setRecovery] = useState<AutosaveEntry | null>(null);
   const [status, setStatus] = useState<StatusMessage | null>(null);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("svg");
 
   const activePage = diagram.pages.find((page) => page.id === activePageId);
   const objectCount = activePage?.objects.length ?? 0;
@@ -309,21 +312,37 @@ export function App(): React.JSX.Element {
    * (FR-EXP-18) — an empty canvas, a refused save, or a raster too large to
    * allocate all need different responses, and none of them is a stack trace.
    */
-  const handleExport = useCallback(
-    async (format: ExportFormat): Promise<void> => {
+  const openExportDialog = useCallback((format: ExportFormat): void => {
+    setExportFormat(format);
+    setExportDialogOpen(true);
+  }, []);
+
+  const handleExportRequest = useCallback(
+    async (options: ExportOptions): Promise<void> => {
       if (!desktop) return;
       const doc = useDocumentStore.getState();
+      const editor = useEditorStore.getState();
       const page = doc.document.pages.find(
         (entry) => entry.id === doc.activePageId,
       );
+
+      // Viewport scope crops to what is on screen, which only the canvas element
+      // size and the live pan and zoom can supply (FR-EXP-06).
+      const origin = screenToWorld({ x: 0, y: 0 }, editor.viewport);
+      const viewportBounds = {
+        x: origin.x,
+        y: origin.y,
+        width: editor.viewportSize.x / editor.viewport.zoom,
+        height: editor.viewportSize.y / editor.viewport.zoom,
+      };
 
       try {
         const outcome = await exportDiagram(
           desktop,
           page?.objects ?? [],
-          useEditorStore.getState().selection,
+          editor.selection,
           doc.document.meta.title,
-          { format },
+          { ...options, viewportBounds },
         );
         if (outcome.canceled) {
           setStatus({ kind: "info", text: "Export cancelled." });
@@ -332,7 +351,7 @@ export function App(): React.JSX.Element {
         const kilobytes = Math.max(1, Math.round(outcome.bytes / 1024));
         setStatus({
           kind: "info",
-          text: `Exported ${format.toUpperCase()} to ${outcome.filePath} (${kilobytes} kB).`,
+          text: `Exported ${options.format.toUpperCase()} to ${outcome.filePath} (${kilobytes} kB).`,
         });
       } catch (cause) {
         const message =
@@ -517,7 +536,7 @@ export function App(): React.JSX.Element {
                     label={entry.label}
                     size="sm"
                     width="100%"
-                    clickAction={() => handleExport(entry.format)}
+                    clickAction={() => openExportDialog(entry.format)}
                   />
                 ))}
               </VStack>
@@ -633,6 +652,14 @@ export function App(): React.JSX.Element {
             </HStack>
           </LayoutFooter>
         }
+      />
+
+      <ExportDialog
+        isOpen={exportDialogOpen}
+        onOpenChange={setExportDialogOpen}
+        initialFormat={exportFormat}
+        hasSelection={selection.length > 0}
+        onExport={handleExportRequest}
       />
     </Theme>
   );

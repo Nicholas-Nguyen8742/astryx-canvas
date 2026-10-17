@@ -435,12 +435,42 @@ describe("Astryx Architecture Canvas — editing journey", () => {
     }, filePath);
   }
 
+  /**
+   * Drives the export dialog for one format.
+   *
+   * The rail button and the dialog's confirm button carry the same label, so the
+   * confirm click has to be scoped to the dialog or Playwright sees two matches
+   * and fails on strict mode.
+   */
+  async function exportViaDialog(
+    format: "SVG" | "PDF" | "PNG" | "JPEG",
+  ): Promise<void> {
+    await window
+      .getByRole("button", { name: `Export ${format}`, exact: true })
+      .first()
+      .click();
+
+    const dialog = window.getByRole("dialog");
+    await waitFor(
+      async () => (await dialog.count()) > 0,
+      `the ${format} export dialog to open`,
+    );
+    await dialog
+      .getByRole("button", { name: `Export ${format}`, exact: true })
+      .click();
+  }
+
+  /** IHDR carries width and height big-endian at fixed offsets. */
+  function pngSize(bytes: Buffer): { width: number; height: number } {
+    return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+  }
+
   it("exports SVG to disk through the main process", async () => {
     await drawRectangle();
     const target = join(profileDir, "e2e-export.svg");
     await stubSaveDialog(target);
 
-    await window.getByRole("button", { name: "Export SVG" }).click();
+    await exportViaDialog("SVG");
     await waitFor(() => existsSync(target), "the SVG export to reach the disk");
 
     const contents = readFileSync(target, "utf8");
@@ -459,7 +489,7 @@ describe("Astryx Architecture Canvas — editing journey", () => {
     const target = join(profileDir, "e2e-export.pdf");
     await stubSaveDialog(target);
 
-    await window.getByRole("button", { name: "Export PDF" }).click();
+    await exportViaDialog("PDF");
     // Printing spins up a hidden window, so this gets a longer leash.
     await waitFor(
       () => existsSync(target),
@@ -480,7 +510,7 @@ describe("Astryx Architecture Canvas — editing journey", () => {
     const target = join(profileDir, "e2e-export.png");
     await stubSaveDialog(target);
 
-    await window.getByRole("button", { name: "Export PNG" }).click();
+    await exportViaDialog("PNG");
     await waitFor(
       () => existsSync(target),
       "the PNG export to reach the disk",
@@ -492,6 +522,12 @@ describe("Astryx Architecture Canvas — editing journey", () => {
       0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
     ]);
     expect(bytes.byteLength).toBeGreaterThan(100);
+
+    // Proves the scale option is actually applied rather than ignored
+    // (FR-EXP-14). The drawn rectangle is 140x90 world units; the exporter pads
+    // by 24 on every side, and the dialog defaults to 2x, so the raster must be
+    // (140 + 48) * 2 by (90 + 48) * 2.
+    expect(pngSize(bytes)).toEqual({ width: 376, height: 276 });
   });
 
   it("exports a JPEG raster to disk", async () => {
@@ -499,7 +535,7 @@ describe("Astryx Architecture Canvas — editing journey", () => {
     const target = join(profileDir, "e2e-export.jpg");
     await stubSaveDialog(target);
 
-    await window.getByRole("button", { name: "Export JPEG" }).click();
+    await exportViaDialog("JPEG");
     await waitFor(
       () => existsSync(target),
       "the JPEG export to reach the disk",
