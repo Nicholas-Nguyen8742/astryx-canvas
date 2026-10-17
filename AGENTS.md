@@ -96,6 +96,24 @@ CDN assets. When touching styles or dependencies, prove it by grepping the
 *built* output in `out/` for remote origins rather than trusting the source —
 a transitive `@import` will not show up in the files you edited.
 
+### Performance budget
+
+NFR-PERF-01 (window usable within 3s of a cold start) is **met, and enforced by
+a test rather than assumed**. Measured at 216ms from launch to canvas mounted —
+roughly 14x headroom.
+
+The renderer bundle is ~1.35 MB in a single chunk and Vite warns about it. **Do
+not "fix" that warning with manual chunking.** It is a build-time size lint, not
+a performance measurement. This app loads from local disk inside Electron, where
+splitting the bundle buys more requests and more config for no measurable
+cold-start gain. The E2E suite prints the real number on every run
+(`[perf] cold start to canvas mounted: Nms`) — optimise against that instead.
+
+Read the caveats before trusting the number near the budget: it is one sample on
+a warm filesystem cache, taken against `out/main/index.js` under `node_modules`
+Electron rather than the packaged executable, so it excludes OS executable load
+and asar unpacking. A packaged cold start on a cold cache will be slower.
+
 ### Environment gotchas
 
 - A **formatter hook rewrites files on every write** (double quotes, 4-space CSS
