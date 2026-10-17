@@ -13,6 +13,7 @@ import {
 import { objectBounds } from "../../src/renderer/src/editor/geometry";
 import type {
   Connector,
+  ConnectorRouting,
   DiagramObject,
   PortInstance,
 } from "../../src/renderer/src/document/model";
@@ -374,5 +375,85 @@ describe("indexObjects", () => {
     const index = indexObjects([box("a", 0, 0), box("a", 500, 500)]);
     expect(index.size).toBe(1);
     expect(index.get("a")?.transform.x).toBe(500);
+  });
+});
+
+describe("labelAnchor", () => {
+  // Deliberately asymmetric: with the two shapes side by side or square on a
+  // diagonal, every routing collapses onto the same line and the anchors cannot
+  // be told apart.
+  const asymmetric = [box("a", 0, 0), box("b", 300, 200)];
+
+  function resolve(routing: ConnectorRouting) {
+    const resolved = resolveConnector(
+      connector({ routing }),
+      indexObjects(asymmetric),
+    );
+    if (!resolved) throw new Error("expected the connector to resolve");
+    return resolved;
+  }
+
+  it("sits at the midpoint of a straight route", () => {
+    const resolved = resolve("straight");
+    expect(resolved.labelAnchor.x).toBeCloseTo(
+      (resolved.start.x + resolved.end.x) / 2,
+      6,
+    );
+    expect(resolved.labelAnchor.y).toBeCloseTo(
+      (resolved.start.y + resolved.end.y) / 2,
+      6,
+    );
+  });
+
+  it("sits on the turning segment of an orthogonal route", () => {
+    const resolved = resolve("orthogonal");
+    // The route turns at the horizontal centre and runs vertically there, so the
+    // label belongs on that segment: same x as the turn, y between the anchors.
+    const turnX = (resolved.start.x + resolved.end.x) / 2;
+    expect(resolved.labelAnchor.x).toBeCloseTo(turnX, 6);
+    expect(resolved.labelAnchor.y).toBeGreaterThanOrEqual(
+      Math.min(resolved.start.y, resolved.end.y),
+    );
+    expect(resolved.labelAnchor.y).toBeLessThanOrEqual(
+      Math.max(resolved.start.y, resolved.end.y),
+    );
+  });
+
+  it("sits on the curve at t = 0.5, evaluated from the Bezier", () => {
+    const resolved = resolve("curved");
+    // Recomputed from the definition rather than read back from the
+    // implementation, so changing the control points forces a conscious update
+    // here instead of silently moving every label off its line.
+    const dx = resolved.end.x - resolved.start.x;
+    const dy = resolved.end.y - resolved.start.y;
+    const horizontalFirst = Math.abs(dx) >= Math.abs(dy);
+    const c1 = horizontalFirst
+      ? { x: resolved.start.x + dx / 2, y: resolved.start.y }
+      : { x: resolved.start.x, y: resolved.start.y + dy / 2 };
+    const c2 = horizontalFirst
+      ? { x: resolved.end.x - dx / 2, y: resolved.end.y }
+      : { x: resolved.end.x, y: resolved.end.y - dy / 2 };
+
+    expect(resolved.labelAnchor.x).toBeCloseTo(
+      (resolved.start.x + 3 * c1.x + 3 * c2.x + resolved.end.x) / 8,
+      6,
+    );
+    expect(resolved.labelAnchor.y).toBeCloseTo(
+      (resolved.start.y + 3 * c1.y + 3 * c2.y + resolved.end.y) / 8,
+      6,
+    );
+  });
+
+  it("stays finite for coincident shapes, where every routing degenerates", () => {
+    const coincident = [box("a", 0, 0), box("b", 0, 0)];
+    for (const routing of ["straight", "orthogonal", "curved"] as const) {
+      const resolved = resolveConnector(
+        connector({ routing }),
+        indexObjects(coincident),
+      );
+      expect(resolved).not.toBeNull();
+      expect(Number.isFinite(resolved!.labelAnchor.x)).toBe(true);
+      expect(Number.isFinite(resolved!.labelAnchor.y)).toBe(true);
+    }
   });
 });

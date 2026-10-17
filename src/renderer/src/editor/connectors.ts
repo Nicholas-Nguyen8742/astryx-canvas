@@ -28,6 +28,13 @@ export interface ResolvedConnector {
   end: Point;
   /** SVG path data in world coordinates, ready for a `<path d>`. */
   d: string;
+  /**
+   * Where the connector's label sits, if it has one.
+   *
+   * Resolved here rather than at each render site so the live canvas and the
+   * export writer cannot place the same label in two different spots.
+   */
+  labelAnchor: Point;
 }
 
 /**
@@ -120,28 +127,54 @@ function format(value: number): string {
     : value.toFixed(3).replace(/\.?0+$/, "");
 }
 
-function straightPath(start: Point, end: Point): string {
-  return `M ${format(start.x)} ${format(start.y)} L ${format(end.x)} ${format(end.y)}`;
+/** One routing's geometry: the path to stroke and where a label belongs. */
+interface RouteGeometry {
+  d: string;
+  /**
+   * Where a label belongs, derived from the route rather than assumed.
+   *
+   * For the three routings as currently constructed this lands on the midpoint
+   * of the chord between the anchors, and that midpoint genuinely does lie on
+   * the path: the orthogonal route turns at the horizontal centre, and this
+   * Bezier is symmetric about it. It is still computed per routing, because that
+   * is a consequence of the control points and the turn position, not something
+   * label placement should quietly depend on. Change either and a chord midpoint
+   * would drift off the line while a route-derived anchor would follow it.
+   */
+  anchor: Point;
 }
 
-function orthogonalPath(start: Point, end: Point): string {
+function straightRoute(start: Point, end: Point): RouteGeometry {
+  return {
+    d: `M ${format(start.x)} ${format(start.y)} L ${format(end.x)} ${format(end.y)}`,
+    anchor: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 },
+  };
+}
+
+function orthogonalRoute(start: Point, end: Point): RouteGeometry {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
-  const mid = format(
-    Math.abs(dx) >= Math.abs(dy) ? start.x + dx / 2 : start.y + dy / 2,
-  );
+  const horizontalFirst = Math.abs(dx) >= Math.abs(dy);
+  const mid = horizontalFirst ? start.x + dx / 2 : start.y + dy / 2;
+  const midText = format(mid);
 
   // Run along the dominant axis first, turn once at the midpoint, then run along
   // the other. Turning at the midpoint rather than at the corner keeps the two
   // halves balanced as either object is dragged.
   const [x1, y1] = [format(start.x), format(start.y)];
   const [x2, y2] = [format(end.x), format(end.y)];
-  return Math.abs(dx) >= Math.abs(dy)
-    ? `M ${x1} ${y1} L ${mid} ${y1} L ${mid} ${y2} L ${x2} ${y2}`
-    : `M ${x1} ${y1} L ${x1} ${mid} L ${x2} ${mid} L ${x2} ${y2}`;
+  return {
+    d: horizontalFirst
+      ? `M ${x1} ${y1} L ${midText} ${y1} L ${midText} ${y2} L ${x2} ${y2}`
+      : `M ${x1} ${y1} L ${x1} ${midText} L ${x2} ${midText} L ${x2} ${y2}`,
+    // Centre of the middle segment, which is the only one with room beside it.
+    anchor: horizontalFirst
+      ? { x: mid, y: (start.y + end.y) / 2 }
+      : { x: (start.x + end.x) / 2, y: mid },
+  };
 }
 
-function curvedPath(start: Point, end: Point): string {
+function curvedRoute(start: Point, end: Point): RouteGeometry {
   const dx = end.x - start.x;
   const dy = end.y - start.y;
   // Control points pushed along the dominant axis, which is what makes the curve
@@ -156,11 +189,20 @@ function curvedPath(start: Point, end: Point): string {
           { x: start.x, y: start.y + dy / 2 },
           { x: end.x, y: end.y - dy / 2 },
         ];
-  return (
-    `M ${format(start.x)} ${format(start.y)} ` +
-    `C ${format(c1.x)} ${format(c1.y)} ${format(c2.x)} ${format(c2.y)} ` +
-    `${format(end.x)} ${format(end.y)}`
-  );
+  return {
+    d:
+      `M ${format(start.x)} ${format(start.y)} ` +
+      `C ${format(c1.x)} ${format(c1.y)} ${format(c2.x)} ${format(c2.y)} ` +
+      `${format(end.x)} ${format(end.y)}`,
+    // The cubic Bezier at t = 0.5, which is (P0 + 3P1 + 3P2 + P3) / 8. With
+    // these symmetric control points that evaluates to the chord midpoint, but
+    // it is taken from the curve so it stays on the line if the control points
+    // are ever changed to bow further out.
+    anchor: {
+      x: (start.x + 3 * c1.x + 3 * c2.x + end.x) / 8,
+      y: (start.y + 3 * c1.y + 3 * c2.y + end.y) / 8,
+    },
+  };
 }
 
 /**
@@ -188,14 +230,14 @@ export function resolveConnector(
   const end = resolveEndpoint(connector.target, index, targetAim);
   if (!start || !end) return null;
 
-  const d =
+  const route =
     connector.routing === "orthogonal"
-      ? orthogonalPath(start, end)
+      ? orthogonalRoute(start, end)
       : connector.routing === "curved"
-        ? curvedPath(start, end)
-        : straightPath(start, end);
+        ? curvedRoute(start, end)
+        : straightRoute(start, end);
 
-  return { start, end, d };
+  return { start, end, d: route.d, labelAnchor: route.anchor };
 }
 
 /** Resolves every connector against one shared index. */
