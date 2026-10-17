@@ -1,6 +1,8 @@
 import type {
   Connector,
   ConnectorEndpoint,
+  ConnectorRouting,
+  ConnectorStyle,
   DiagramObject,
   DiagramStyle,
   TextContent,
@@ -32,6 +34,20 @@ export interface ExtractedConnector {
 export interface ConnectorEndpoints {
   source?: ConnectorEndpoint;
   target?: ConnectorEndpoint;
+}
+
+/**
+ * The connector properties the inspector edits.
+ *
+ * A patch rather than a whole connector, and `style` is itself partial, so
+ * changing the routing cannot clobber an arrowhead the caller never mentioned.
+ * Replacing the whole object would force every call site to read the connector
+ * first and restate fields it has no opinion about, which is how a property
+ * quietly gets reset to its default.
+ */
+export interface ConnectorAppearance {
+  routing?: ConnectorRouting;
+  style?: Partial<ConnectorStyle>;
 }
 
 /**
@@ -110,6 +126,24 @@ export interface DocumentMutator {
   getConnectorEndpoints(
     ids: readonly string[],
   ): Record<string, ConnectorEndpoints>;
+  /**
+   * Applies a partial appearance patch, merging `style` field by field.
+   *
+   * Merging rather than replacing is what lets the inspector own one control per
+   * property: a routing dropdown that had to restate the arrowheads would reset
+   * them the moment either side gained a field the other does not know about.
+   */
+  setConnectorAppearance(
+    entries: Readonly<Record<string, ConnectorAppearance>>,
+  ): void;
+  /**
+   * The full current appearance, so a command can capture enough to undo. Read
+   * back whole even though writes are partial: an undo has to restore properties
+   * the patch never mentioned too.
+   */
+  getConnectorAppearance(
+    ids: readonly string[],
+  ): Record<string, ConnectorAppearance>;
 }
 
 /**

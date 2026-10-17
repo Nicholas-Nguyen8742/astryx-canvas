@@ -13,6 +13,7 @@ import type {
 } from "../document/model";
 import { createEmptyDocument } from "../document/empty-document";
 import type {
+  ConnectorAppearance,
   ConnectorEndpoints,
   DocumentMutator,
   ExtractedConnector,
@@ -357,6 +358,42 @@ export function createDocumentStore(
             result[connector.id] = {
               source: connector.source,
               target: connector.target,
+            };
+          }
+        }
+        return result;
+      },
+
+      setConnectorAppearance(entries) {
+        mutateConnectors((list) =>
+          list.map((connector) => {
+            const patch = entries[connector.id];
+            if (!patch) return connector;
+            return {
+              ...connector,
+              ...(patch.routing !== undefined
+                ? { routing: patch.routing }
+                : {}),
+              // Merged field by field, not replaced: an inspector control owns
+              // one property and has no opinion about the rest.
+              ...(patch.style
+                ? { style: { ...connector.style, ...patch.style } }
+                : {}),
+            };
+          }),
+        );
+      },
+
+      getConnectorAppearance(ids) {
+        const wanted = new Set(ids);
+        const result: Record<string, ConnectorAppearance> = {};
+        for (const connector of activeConnectors()) {
+          if (wanted.has(connector.id)) {
+            // Whole values, not a partial echo of whatever was last written:
+            // undo has to restore properties the patch never mentioned too.
+            result[connector.id] = {
+              routing: connector.routing,
+              style: connector.style,
             };
           }
         }

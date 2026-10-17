@@ -8,6 +8,7 @@ import {
   MoveObjectsCommand,
   ResizeObjectCommand,
   RewireConnectorCommand,
+  UpdateConnectorAppearanceCommand,
   UpdateConnectorLabelCommand,
   UpdateContentCommand,
   UpdateStyleCommand,
@@ -944,6 +945,115 @@ describe("connectors", () => {
       expect(endpointsOf(store, "conn1")?.target).toEqual({ objectId: "c" });
       history.getState().undo();
       expect(endpointsOf(store, "conn1")?.target).toEqual({ objectId: "b" });
+    });
+  });
+
+  describe("appearance", () => {
+    function appearanceOf(
+      store: ReturnType<typeof createDocumentStore>,
+      id: string,
+    ) {
+      return store.getState().getConnectorAppearance([id])[id];
+    }
+
+    it("reads back the routing and the whole style", () => {
+      const store = wiredStore();
+      const appearance = appearanceOf(store, "conn1");
+      expect(appearance?.routing).toBe("straight");
+      expect(appearance?.style?.endArrow).toBe("triangle");
+      expect(appearance?.style?.strokeWidth).toBe(2);
+    });
+
+    it("changes routing without disturbing the arrowheads", () => {
+      const store = wiredStore();
+      const before = appearanceOf(store, "conn1")!;
+      store
+        .getState()
+        .setConnectorAppearance({ conn1: { routing: "orthogonal" } });
+
+      const after = appearanceOf(store, "conn1")!;
+      expect(after.routing).toBe("orthogonal");
+      expect(after.style).toEqual(before.style);
+    });
+
+    it("changes one style field and leaves the rest of the style alone", () => {
+      const store = wiredStore();
+      store.getState().setConnectorAppearance({
+        conn1: { style: { startArrow: "diamond" } },
+      });
+
+      const after = appearanceOf(store, "conn1")!;
+      expect(after.style?.startArrow).toBe("diamond");
+      // The whole point of merging rather than replacing: a control that owns one
+      // property cannot reset the properties it never mentioned.
+      expect(after.style?.endArrow).toBe("triangle");
+      expect(after.style?.strokeWidth).toBe(2);
+      expect(after.routing).toBe("straight");
+    });
+
+    it("leaves connectors the entry does not name untouched", () => {
+      const store = wiredStore();
+      store.getState().setConnectorAppearance({ conn1: { routing: "curved" } });
+      expect(appearanceOf(store, "conn2")?.routing).toBe("straight");
+    });
+
+    it("changes appearance through the command and undoes it", () => {
+      const store = wiredStore();
+      const from = appearanceOf(store, "conn1")!;
+      const command = new UpdateConnectorAppearanceCommand(
+        store.getState(),
+        "conn1",
+        from,
+        { routing: "curved" },
+        "Change routing",
+      );
+
+      // The label is the caller's, because the history list is the only place a
+      // user can see what an undo is about to do.
+      expect(command.label).toBe("Change routing");
+      command.execute();
+      expect(appearanceOf(store, "conn1")?.routing).toBe("curved");
+
+      command.undo();
+      expect(appearanceOf(store, "conn1")?.routing).toBe("straight");
+    });
+
+    it("does not coalesce, so two control changes are two undo steps", () => {
+      const store = wiredStore();
+      const history = createHistoryStore();
+
+      history
+        .getState()
+        .execute(
+          new UpdateConnectorAppearanceCommand(
+            store.getState(),
+            "conn1",
+            appearanceOf(store, "conn1")!,
+            { routing: "curved" },
+            "Change routing",
+          ),
+        );
+      history
+        .getState()
+        .execute(
+          new UpdateConnectorAppearanceCommand(
+            store.getState(),
+            "conn1",
+            appearanceOf(store, "conn1")!,
+            { style: { endArrow: "diamond" } },
+            "Change end arrowhead",
+          ),
+        );
+
+      expect(history.getState().past).toHaveLength(2);
+
+      // Each undo reverts exactly one control rather than both at once.
+      history.getState().undo();
+      expect(appearanceOf(store, "conn1")?.style?.endArrow).toBe("triangle");
+      expect(appearanceOf(store, "conn1")?.routing).toBe("curved");
+
+      history.getState().undo();
+      expect(appearanceOf(store, "conn1")?.routing).toBe("straight");
     });
   });
 });

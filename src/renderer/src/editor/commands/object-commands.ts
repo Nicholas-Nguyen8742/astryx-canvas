@@ -6,6 +6,7 @@ import type {
   Transform,
 } from "../../document/model";
 import type {
+  ConnectorAppearance,
   ConnectorEndpoints,
   DocumentMutator,
   EditorCommand,
@@ -384,5 +385,38 @@ export class RewireConnectorCommand implements EditorCommand {
 
   undo(): void {
     this.mutator.setConnectorEndpoints({ [this.connectorId]: this.from });
+  }
+}
+
+/**
+ * Connector routing and arrowheads, edited from the inspector.
+ *
+ * The label comes from the caller because the history list is the only place a
+ * user can see what an undo is about to do, and one generic "Change connector
+ * style" for every control would make it useless. "Change routing" and "Change
+ * end arrowhead" are distinguishable at a glance.
+ *
+ * Deliberately does not coalesce. Each control change is a discrete decision the
+ * user may want to step back through individually, and folding them would make
+ * one undo revert two unrelated properties at once.
+ */
+export class UpdateConnectorAppearanceCommand implements EditorCommand {
+  readonly id = nextCommandId("connector-appearance");
+  readonly timestamp = new Date().toISOString();
+
+  constructor(
+    private readonly mutator: DocumentMutator,
+    private readonly connectorId: string,
+    private readonly from: ConnectorAppearance,
+    private readonly to: ConnectorAppearance,
+    readonly label: string,
+  ) {}
+
+  execute(): void {
+    this.mutator.setConnectorAppearance({ [this.connectorId]: this.to });
+  }
+
+  undo(): void {
+    this.mutator.setConnectorAppearance({ [this.connectorId]: this.from });
   }
 }
