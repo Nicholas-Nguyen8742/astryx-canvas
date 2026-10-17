@@ -1274,6 +1274,62 @@ describe("Astryx Architecture Canvas — editing journey", () => {
     expect(await connectorCount()).toBe(1);
   });
 
+  it("changes a connector's routing from the inspector and undoes it", async () => {
+    await drawShape("Rectangle", 100, 120, 1);
+    // Drawn below and to the right rather than level with the first, so the three
+    // routings produce genuinely different paths. Two level shapes give a
+    // straight line and an orthogonal Z the same two endpoints, and only the
+    // number of segments would differ.
+    await drawShape("Rectangle", 320, 300, 2);
+
+    const routing = window.getByRole("combobox", { name: "Routing" });
+    // Nothing selected, so the inspector has no connector controls to offer.
+    expect(await routing.count()).toBe(0);
+
+    await window
+      .getByRole("button", { name: "Connector", exact: true })
+      .click();
+    await clickShapeCentre(100, 120);
+    await clickShapeCentre(320, 300);
+    await waitFor(
+      async () => (await connectorCount()) === 1,
+      "the connector to be created",
+    );
+
+    // Selecting the connector is what gives the inspector something to edit.
+    // Midway along the line between the two shapes.
+    const box = await canvasBox();
+    await window.mouse.click(box.x + 280, box.y + 255);
+    await waitFor(
+      async () => (await routing.count()) === 1,
+      "the routing control to appear in the inspector",
+    );
+
+    const straight = await connectorPath();
+    expect(straight).not.toContain("C ");
+
+    // Driven through the documented component class rather than a guessed ARIA
+    // role: the theming table lists astryx-selector-option-row as the option
+    // row's class, so that is a contract rather than an implementation detail.
+    await routing.click();
+    await window
+      .locator(".astryx-selector-option-row", { hasText: "Curved" })
+      .click();
+
+    await waitFor(
+      async () => (await connectorPath()).includes("C "),
+      "the connector to redraw as a curve",
+    );
+
+    // One undo returns to the straight route and nothing else changes: a routing
+    // control owns one property, so it must not disturb the arrowheads.
+    await window.keyboard.press("Control+z");
+    await waitFor(
+      async () => (await connectorPath()) === straight,
+      "undo to restore the straight route",
+    );
+  });
+
   // Runs last: a failure here means one of the journeys above threw inside React.
   it("produces no renderer errors across the whole journey", () => {
     expect(pageErrors.map((error) => error.message)).toEqual([]);

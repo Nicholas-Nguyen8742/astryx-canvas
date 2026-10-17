@@ -11,6 +11,7 @@ import {
   LayoutHeader,
   LayoutPanel,
 } from "@astryxdesign/core/Layout";
+import { Selector } from "@astryxdesign/core/Selector";
 import { StackItem } from "@astryxdesign/core/Stack";
 import { Text } from "@astryxdesign/core/Text";
 import { Theme } from "@astryxdesign/core/theme";
@@ -27,7 +28,12 @@ import {
   UNTITLED_DOCUMENT_TITLE,
   serializeDocument,
 } from "./document/empty-document";
-import type { ThemeMode } from "./document/model";
+import type {
+  ArrowType,
+  Connector,
+  ConnectorRouting,
+  ThemeMode,
+} from "./document/model";
 import { parseDocument } from "./document/validate";
 import { canvasEngine } from "./editor/canvas/adapter";
 import { SvgCanvas } from "./editor/canvas/SvgCanvas";
@@ -37,8 +43,15 @@ import { fitViewport, screenToWorld, zoomAtCenter } from "./editor/geometry";
 import { useDocumentStore } from "./state/document-store";
 import { useEditorStore, type ActiveTool } from "./state/editor-store";
 import { useHistoryStore } from "./state/history-store";
-import { ReorderObjectsCommand } from "./editor/commands/object-commands";
+import type { ConnectorAppearance } from "./editor/commands";
+import {
+  ReorderObjectsCommand,
+  UpdateConnectorAppearanceCommand,
+} from "./editor/commands/object-commands";
 import { zOrderLabel, type ZOrderMove } from "./editor/z-order";
+
+/** Stable empty reference, so the connector selector cannot return a new array. */
+const NO_CONNECTORS: readonly Connector[] = [];
 
 /** TRD §16.3: autosave 2s after the last change. */
 const AUTOSAVE_DEBOUNCE_MS = 2000;
@@ -81,6 +94,27 @@ const ARRANGE: readonly { move: ZOrderMove; shortcut: string }[] = [
   { move: "back", shortcut: "Ctrl+Shift+[" },
 ];
 
+/** Connector routing, offered in the inspector (FR-CONN routing). */
+const ROUTING_OPTIONS = [
+  { value: "straight", label: "Straight" },
+  { value: "orthogonal", label: "Orthogonal — right angles" },
+  { value: "curved", label: "Curved" },
+];
+
+/**
+ * Arrowhead shapes, offered at each end.
+ *
+ * The same four the renderer and the export writer build markers for, so the
+ * inspector cannot offer a shape that nothing knows how to draw.
+ */
+const ARROW_OPTIONS = [
+  { value: "none", label: "None" },
+  { value: "triangle", label: "Triangle" },
+  { value: "open", label: "Open" },
+  { value: "diamond", label: "Diamond" },
+  { value: "circle", label: "Circle" },
+];
+
 /** Formats offered in the rail (FR-EXP-01/02/03/04). WebP remains a COULD. */
 const EXPORT_FORMATS: readonly { format: ExportFormat; label: string }[] = [
   { format: "svg", label: "Export SVG" },
@@ -115,9 +149,39 @@ export function App(): React.JSX.Element {
 
   const activeTool = useEditorStore((state) => state.activeTool);
   const selection = useEditorStore((state) => state.selection);
+  const connectorSelection = useEditorStore(
+    (state) => state.connectorSelection,
+  );
   const viewport = useEditorStore((state) => state.viewport);
   const cursorWorld = useEditorStore((state) => state.cursorWorld);
   const gridEnabled = useEditorStore((state) => state.grid.enabled);
+
+  const connectors = useDocumentStore(
+    (state) =>
+      state.document.pages.find((page) => page.id === state.activePageId)
+        ?.connectors ?? NO_CONNECTORS,
+  );
+
+  /**
+   * The one connector the inspector edits, or undefined.
+   *
+   * Only ever a single connector: with several selected there is no one value to
+   * show in a dropdown, and displaying one of them would imply the others match
+   * when they may not. A multi-edit inspector needs a "mixed" state, which is a
+   * larger design question than this panel should answer silently.
+   */
+  const selectedConnector =
+    connectorSelection.length === 1
+      ? connectors.find((entry) => entry.id === connectorSelection[0])
+      : undefined;
+
+  /** What the inspector says when it has nothing editable to show. */
+  const inspectorHint =
+    connectorSelection.length > 1
+      ? `${connectorSelection.length} connectors selected. Select one to edit its routing and arrowheads.`
+      : selection.length > 0
+        ? `${selection.length} object${selection.length === 1 ? "" : "s"} selected. Object style controls are not implemented yet.`
+        : "Nothing selected. Draw a shape from the tool rail, or click a connector to edit its routing and arrowheads.";
 
   const [filePath, setFilePath] = useState<string | null>(null);
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
@@ -347,6 +411,31 @@ export function App(): React.JSX.Element {
     if (command.isNoOp) return;
     useHistoryStore.getState().execute(command);
   }, []);
+
+  /**
+   * Applies one inspector control to the selected connector.
+   *
+   * Reads the whole appearance as the undo state even though the patch names a
+   * single property, so undo restores what was actually there rather than
+   * replaying a partial write that could leave the other properties wherever an
+   * earlier edit put them.
+   */
+  const changeConnectorAppearance = useCallback(
+    (patch: ConnectorAppearance, label: string): void => {
+      const editor = useEditorStore.getState();
+      if (editor.connectorSelection.length !== 1) return;
+      const id = editor.connectorSelection[0]!;
+      const doc = useDocumentStore.getState();
+      const from = doc.getConnectorAppearance([id])[id];
+      if (!from) return;
+      useHistoryStore
+        .getState()
+        .execute(
+          new UpdateConnectorAppearanceCommand(doc, id, from, patch, label),
+        );
+    },
+    [],
+  );
 
   /**
    * FR-EXP-01..04. An export failure surfaces as a message the user can act on
@@ -627,11 +716,51 @@ export function App(): React.JSX.Element {
           >
             <VStack gap={3}>
               <Heading level={5}>Inspector</Heading>
-              <Text type="supporting" color="secondary">
-                {selection.length === 0
-                  ? "Nothing selected. Draw a shape from the tool rail, then select it to edit its geometry and style."
-                  : `${selection.length} object${selection.length === 1 ? "" : "s"} selected. Style controls arrive with the inspector milestone.`}
-              </Text>
+              {selectedConnector ? (
+                <VStack gap={3}>
+                  <Text type="label">Connector</Text>
+                  <Selector
+                    label="Routing"
+                    options={ROUTING_OPTIONS}
+                    value={selectedConnector.routing}
+                    onChange={(value) =>
+                      changeConnectorAppearance(
+                        { routing: value as ConnectorRouting },
+                        "Change routing",
+                      )
+                    }
+                    width="100%"
+                  />
+                  <Selector
+                    label="Start arrowhead"
+                    options={ARROW_OPTIONS}
+                    value={selectedConnector.style.startArrow ?? "none"}
+                    onChange={(value) =>
+                      changeConnectorAppearance(
+                        { style: { startArrow: value as ArrowType } },
+                        "Change start arrowhead",
+                      )
+                    }
+                    width="100%"
+                  />
+                  <Selector
+                    label="End arrowhead"
+                    options={ARROW_OPTIONS}
+                    value={selectedConnector.style.endArrow ?? "none"}
+                    onChange={(value) =>
+                      changeConnectorAppearance(
+                        { style: { endArrow: value as ArrowType } },
+                        "Change end arrowhead",
+                      )
+                    }
+                    width="100%"
+                  />
+                </VStack>
+              ) : (
+                <Text type="supporting" color="secondary">
+                  {inspectorHint}
+                </Text>
+              )}
             </VStack>
           </LayoutPanel>
         }
