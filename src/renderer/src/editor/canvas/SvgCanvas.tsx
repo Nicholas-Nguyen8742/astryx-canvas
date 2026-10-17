@@ -12,13 +12,17 @@ import {
 import type {
   ArrowType,
   Connector,
+  ConnectorEndpoint,
   DiagramObject,
   Point,
   Transform,
 } from "../../document/model";
 import {
   intersects,
+  nearestPort,
   objectBounds,
+  portsOf,
+  portWorldPoint,
   resizeTransform,
   screenToWorld,
   snapPoint,
@@ -68,6 +72,15 @@ import { TextEditorOverlay } from "./TextEditorOverlay";
 
 /** Handle edge length in screen pixels, so handles stay grabbable at any zoom. */
 const HANDLE_SCREEN_SIZE = 8;
+/**
+ * Port snap radius and drawn radius, both in screen pixels.
+ *
+ * Screen units divided by zoom at the point of use, never world units: a fixed
+ * world tolerance would make ports impossible to hit when zoomed out and
+ * enormous when zoomed in.
+ */
+const PORT_SNAP_SCREEN_PX = 12;
+const PORT_HANDLE_SCREEN_R = 4;
 /** A line has no fill to click, so it gets an invisible constant-width hit stroke. */
 const LINE_HIT_WIDTH = 12;
 /** Arrow-key nudge step in world units; Shift multiplies it (FR-OBJ-14/15). */
@@ -271,14 +284,16 @@ function ArrowMarkerDefs() {
  */
 function ConnectorPreview({
   sourceId,
+  sourcePortId,
   cursor,
   index,
 }: {
   sourceId: string;
+  sourcePortId?: string;
   cursor: Point;
   index: ReadonlyMap<string, DiagramObject>;
 }) {
-  const connector = previewConnector(sourceId, cursor);
+  const connector = previewConnector(sourceId, cursor, sourcePortId);
   const resolved = resolveConnector(connector, index);
   // Null when the source object has vanished mid-gesture; drawing to the origin
   // would be worse than drawing nothing.
@@ -289,6 +304,42 @@ function ConnectorPreview({
       pointerEvents="none"
       vectorEffect="non-scaling-stroke"
     />
+  );
+}
+
+/**
+ * The snap targets shown while wiring, so a click's attachment point is visible
+ * before it is committed.
+ *
+ * `pointerEvents` must stay off. These circles sit in the world group beside the
+ * shapes, not inside them, so a port that swallowed the click would leave the
+ * pointer-down handler with no `data-object-id` to resolve and the connector
+ * tool would appear to do nothing at all.
+ */
+function PortHandles({
+  object,
+  zoom,
+}: {
+  object: DiagramObject;
+  zoom: number;
+}) {
+  const radius = PORT_HANDLE_SCREEN_R / zoom;
+  return (
+    <>
+      {portsOf(object).map((port) => {
+        const point = portWorldPoint(object.transform, port);
+        return (
+          <circle
+            key={port.id}
+            className="canvas-port"
+            cx={point.x}
+            cy={point.y}
+            r={radius}
+            pointerEvents="none"
+          />
+        );
+      })}
+    </>
   );
 }
 
@@ -595,6 +646,18 @@ export function SvgCanvas() {
       const pending =
         store.interaction?.kind === "connector" ? store.interaction : null;
 
+      // Snap to a port when the click lands near one, so the edge is pinned to
+      // the side the user chose instead of sliding along the perimeter every
+      // time the far shape moves. Missing a port is not an error: a bare object
+      // reference still resolves, to a perimeter clip.
+      const endpointFor = (id: string): ConnectorEndpoint => {
+        const found = objects.find((object) => object.id === id);
+        const hit = found
+          ? nearestPort(found, world, PORT_SNAP_SCREEN_PX / store.viewport.zoom)
+          : null;
+        return hit ? { objectId: id, portId: hit.portId } : { objectId: id };
+      };
+
       if (!objectId) {
         // Empty canvas abandons the pending wire. Leaving the rubber band up
         // would make the user hunt for Escape to exit a mode they believe they
@@ -607,6 +670,7 @@ export function SvgCanvas() {
         store.setInteraction({
           kind: "connector",
           sourceId: objectId,
+          sourcePortId: endpointFor(objectId).portId,
           currentWorld: world,
         });
         return;
@@ -616,8 +680,8 @@ export function SvgCanvas() {
       if (pending.sourceId === objectId) return;
 
       const connector = createConnector(
-        { objectId: pending.sourceId },
-        { objectId },
+        { objectId: pending.sourceId, portId: pending.sourcePortId },
+        endpointFor(objectId),
       );
       useHistoryStore
         .getState()
@@ -880,6 +944,22 @@ export function SvgCanvas() {
     ? objects.find((object) => object.id === hoveredId)
     : undefined;
 
+  /**
+   * Shapes worth showing snap targets for while wiring: the one under the
+   * cursor, plus the one already chosen as the source so the user can see where
+   * it is pinned. Empty for every other tool, and a stable reference so this
+   * does not invalidate anything downstream on each render.
+   */
+  const portTargets =
+    activeTool === "connector"
+      ? objects.filter(
+          (object) =>
+            object.id === hoveredId ||
+            (interaction?.kind === "connector" &&
+              object.id === interaction.sourceId),
+        )
+      : NO_OBJECTS;
+
   const marquee =
     interaction?.kind === "marquee"
       ? (() => {
@@ -1046,10 +1126,17 @@ export function SvgCanvas() {
           {interaction?.kind === "connector" ? (
             <ConnectorPreview
               sourceId={interaction.sourceId}
+              sourcePortId={interaction.sourcePortId}
               cursor={interaction.currentWorld}
               index={objectIndex}
             />
           ) : null}
+
+          {/* Drawn last so the snap targets sit above the shapes and the rubber
+              band rather than being hidden by either. */}
+          {portTargets.map((object) => (
+            <PortHandles key={object.id} object={object} zoom={viewport.zoom} />
+          ))}
 
           {hoveredObject && !selection.includes(hoveredObject.id) ? (
             <rect
@@ -1081,7 +1168,17 @@ export function SvgCanvas() {
             );
           })}
 
-          {singleSelection && !singleSelection.locked
+          {/* Suppressed while wiring. The edge handles sit at the box's edge
+              midpoints — the same coordinates as the n/e/s/w ports — and carry
+              pointerEvents, so they swallowed the click and made those four
+              ports unreachable on any selected shape. Since a shape is selected
+              the moment it is drawn, that broke connecting two shapes at their
+              facing ports, which is the gesture almost every diagram starts
+              with. They are also the wrong affordance in this mode: you are not
+              resizing. */}
+          {singleSelection &&
+          !singleSelection.locked &&
+          activeTool !== "connector"
             ? HANDLES.map((handle) => {
                 const box = objectBounds(singleSelection);
                 const offset = handleOffset(handle);

@@ -226,10 +226,14 @@ export const PREVIEW_CONNECTOR_ID = "__connector_preview__";
  * presentation attribute, but a connector is drawn as a `<path>` inside a group
  * and would keep its own attribute over anything inherited.
  */
-export function previewConnector(sourceId: string, cursor: Point): Connector {
+export function previewConnector(
+  sourceId: string,
+  cursor: Point,
+  sourcePortId?: string,
+): Connector {
   return {
     id: PREVIEW_CONNECTOR_ID,
-    source: { objectId: sourceId },
+    source: { objectId: sourceId, portId: sourcePortId },
     // An empty objectId never resolves, so `resolveConnector` falls through to
     // the fallback point — which is exactly the "free end at the cursor" case.
     target: { objectId: "", fallbackPoint: cursor },

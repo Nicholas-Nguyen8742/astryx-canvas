@@ -1016,6 +1016,101 @@ describe("Astryx Architecture Canvas — editing journey", () => {
     expect(await connectorCount()).toBe(0);
   });
 
+  /**
+   * Clicks a cardinal port of a shape drawn by `drawShape` at (x, y), which is
+   * always 140x90. Screen offsets equal world offsets at 100% zoom, whatever the
+   * viewport origin happens to be.
+   */
+  async function clickPort(
+    x: number,
+    y: number,
+    port: "n" | "e" | "s" | "w",
+  ): Promise<void> {
+    const offsets = {
+      n: { x: x + 70, y },
+      e: { x: x + 140, y: y + 45 },
+      s: { x: x + 70, y: y + 90 },
+      w: { x, y: y + 45 },
+    } as const;
+    const box = await canvasBox();
+    const offset = offsets[port];
+    await window.mouse.click(box.x + offset.x, box.y + offset.y);
+  }
+
+  /** The connector's own `d`, from the visible path rather than the hit stroke. */
+  async function connectorPath(): Promise<string> {
+    return (
+      (await connectorNodes()
+        .first()
+        .locator("path")
+        .last()
+        .getAttribute("d")) ?? ""
+    );
+  }
+
+  /** First coordinate pair of a path: the connector's source anchor. */
+  async function sourceAnchor(): Promise<string> {
+    return (
+      (await connectorPath()).match(/^M ([\d.eE+-]+ [\d.eE+-]+)/)?.[1] ?? ""
+    );
+  }
+
+  it("shows four snap targets on the hovered shape while wiring", async () => {
+    await drawShape("Rectangle", 100, 120, 1);
+
+    await window
+      .getByRole("button", { name: "Connector", exact: true })
+      .click();
+    const box = await canvasBox();
+    await window.mouse.move(box.x + 170, box.y + 165);
+
+    await waitFor(
+      async () =>
+        (await window.locator("svg circle.canvas-port").count()) === 4,
+      "four port handles to appear on the hovered shape",
+    );
+  });
+
+  it("pins a connector to the port it was drawn from", async () => {
+    await drawShape("Rectangle", 100, 120, 1);
+    await drawShape("Rectangle", 320, 120, 2);
+
+    await window
+      .getByRole("button", { name: "Connector", exact: true })
+      .click();
+    // East port of the first shape to west port of the second.
+    await clickPort(100, 120, "e");
+    await clickPort(320, 120, "w");
+    await waitFor(
+      async () => (await connectorCount()) === 1,
+      "the connector to be created",
+    );
+
+    const pathBefore = await connectorPath();
+    const anchorBefore = await sourceAnchor();
+    expect(anchorBefore).not.toBe("");
+
+    // Move the far shape well below the first. With the two side by side a
+    // perimeter clip and the east port resolve to the same point, so this is the
+    // only arrangement that distinguishes them: a pinned anchor must not move,
+    // while a perimeter anchor would slide to the source's bottom edge.
+    const box = await canvasBox();
+    await drag(
+      { x: box.x + 390, y: box.y + 165 },
+      { x: box.x + 390, y: box.y + 365 },
+    );
+
+    await waitFor(
+      async () => (await connectorPath()) !== pathBefore,
+      "the connector to follow the shape that moved",
+    );
+
+    // Asserted on the source anchor rather than absolute coordinates: grid
+    // snapping and the viewport origin both shift the exact numbers, and neither
+    // is what this test is about.
+    expect(await sourceAnchor()).toBe(anchorBefore);
+  });
+
   // Runs last: a failure here means one of the journeys above threw inside React.
   it("produces no renderer errors across the whole journey", () => {
     expect(pageErrors.map((error) => error.message)).toEqual([]);

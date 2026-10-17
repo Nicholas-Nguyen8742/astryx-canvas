@@ -74,6 +74,14 @@ export type Interaction =
       kind: "connector";
       /** The object the connector is being drawn from. */
       sourceId: string;
+      /**
+       * Port the source snapped to, if any.
+       *
+       * Captured at click time rather than re-derived later: by the second click
+       * the cursor has moved, so recomputing it would pin the source to whatever
+       * port the pointer happened to be nearest when the gesture ended.
+       */
+      sourcePortId?: string;
       /** Cursor position, so the rubber band tracks it between clicks. */
       currentWorld: Point;
     };

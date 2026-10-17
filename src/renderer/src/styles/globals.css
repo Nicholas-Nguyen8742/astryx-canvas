@@ -94,3 +94,17 @@ body {
 .canvas-preview {
     stroke: var(--color-accent);
 }
+
+/*
+ * Port snap targets, shown only while the connector tool is active.
+ *
+ * The radius is already divided by zoom in the component, so the circle is a
+ * constant size on screen; non-scaling-stroke does the same for its outline,
+ * without which the ring would thicken into a blob at high zoom.
+ */
+.canvas-port {
+    fill: var(--color-background-surface);
+    stroke: var(--color-accent);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+}
