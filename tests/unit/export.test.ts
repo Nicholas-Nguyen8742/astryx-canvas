@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { ExportError, exportDiagram } from "../../src/renderer/src/export";
-import { createObject, identityTransform } from "../../src/renderer/src/editor/factories";
+import {
+  createObject,
+  identityTransform,
+} from "../../src/renderer/src/editor/factories";
 import type {
   DesktopApi,
   ExportFormat,
@@ -31,7 +34,9 @@ interface FakeDesktop {
   pdfRequests: PdfPrintRequest[];
 }
 
-function makeDesktop(options: { canceled?: boolean; saveError?: string } = {}): FakeDesktop {
+function makeDesktop(
+  options: { canceled?: boolean; saveError?: string } = {},
+): FakeDesktop {
   const saves: SaveBlobRequest[] = [];
   const pdfRequests: PdfPrintRequest[] = [];
 
@@ -47,10 +52,16 @@ function makeDesktop(options: { canceled?: boolean; saveError?: string } = {}): 
       saveBlob: async (request: SaveBlobRequest) => {
         saves.push(request);
         if (options.saveError) {
-          return { ok: false, error: { code: "io", message: options.saveError } } as const;
+          return {
+            ok: false,
+            error: { code: "io", message: options.saveError },
+          } as const;
         }
         if (options.canceled) {
-          return { ok: true, value: { canceled: true, filePath: null } } as const;
+          return {
+            ok: true,
+            value: { canceled: true, filePath: null },
+          } as const;
         }
         return {
           ok: true,
@@ -65,7 +76,10 @@ function makeDesktop(options: { canceled?: boolean; saveError?: string } = {}): 
       printToPdf: async (request: PdfPrintRequest) => {
         pdfRequests.push(request);
         // "%PDF" — enough to assert the bytes reached the save unchanged.
-        return { ok: true, value: new Uint8Array([0x25, 0x50, 0x44, 0x46]).buffer } as const;
+        return {
+          ok: true,
+          value: new Uint8Array([0x25, 0x50, 0x44, 0x46]).buffer,
+        } as const;
       },
     },
   } as unknown as DesktopApi;
@@ -80,7 +94,9 @@ function decode(buffer: ArrayBuffer): string {
 describe("exportDiagram — SVG", () => {
   it("writes standalone SVG markup through the save bridge", async () => {
     const { desktop, saves } = makeDesktop();
-    const outcome = await exportDiagram(desktop, OBJECTS, [], "Network", { format: "svg" });
+    const outcome = await exportDiagram(desktop, OBJECTS, [], "Network", {
+      format: "svg",
+    });
 
     expect(outcome.canceled).toBe(false);
     expect(outcome.format).toBe("svg");
@@ -130,7 +146,9 @@ describe("exportDiagram — SVG", () => {
 describe("exportDiagram — PDF", () => {
   it("routes the generated SVG through the main process printer", async () => {
     const { desktop, pdfRequests, saves } = makeDesktop();
-    const outcome = await exportDiagram(desktop, OBJECTS, [], "Network", { format: "pdf" });
+    const outcome = await exportDiagram(desktop, OBJECTS, [], "Network", {
+      format: "pdf",
+    });
 
     expect(pdfRequests).toHaveLength(1);
     expect(pdfRequests[0]?.svg.startsWith("<svg ")).toBe(true);
@@ -165,12 +183,12 @@ describe("exportDiagram — PDF", () => {
 describe("exportDiagram — failure paths", () => {
   it("refuses to export an empty canvas with an actionable message", async () => {
     const { desktop } = makeDesktop();
-    await expect(exportDiagram(desktop, [], [], "Empty", { format: "svg" })).rejects.toThrow(
-      ExportError,
-    );
-    await expect(exportDiagram(desktop, [], [], "Empty", { format: "svg" })).rejects.toThrow(
-      /nothing to export/i,
-    );
+    await expect(
+      exportDiagram(desktop, [], [], "Empty", { format: "svg" }),
+    ).rejects.toThrow(ExportError);
+    await expect(
+      exportDiagram(desktop, [], [], "Empty", { format: "svg" }),
+    ).rejects.toThrow(/nothing to export/i);
   });
 
   it("ignores hidden objects and reports emptiness when only those exist", async () => {
@@ -183,7 +201,9 @@ describe("exportDiagram — failure paths", () => {
 
   it("reports a cancelled save as cancelled rather than as a failure", async () => {
     const { desktop, saves } = makeDesktop({ canceled: true });
-    const outcome = await exportDiagram(desktop, OBJECTS, [], "Network", { format: "svg" });
+    const outcome = await exportDiagram(desktop, OBJECTS, [], "Network", {
+      format: "svg",
+    });
     expect(outcome.canceled).toBe(true);
     expect(outcome.filePath).toBeNull();
     expect(saves).toHaveLength(1);
@@ -200,5 +220,49 @@ describe("exportDiagram — failure paths", () => {
     const { desktop, saves } = makeDesktop();
     await exportDiagram(desktop, OBJECTS, [], "", { format: "svg" });
     expect(saves[0]?.suggestedName).toBe("Untitled Diagram");
+  });
+});
+
+describe("export framing", () => {
+  // Content spans x 0..300 and y 0..200, so one 24-unit margin on every side
+  // gives a frame of -24 -24 348 248.
+  const ONE_PADDED_VIEWBOX = 'viewBox="-24 -24 348 248"';
+
+  it("pads the content exactly once so the SVG and raster cannot disagree", async () => {
+    const { desktop, saves } = makeDesktop();
+    await exportDiagram(desktop, OBJECTS, [], "Network", { format: "svg" });
+    const svg = decode(saves[0]!.data as ArrayBuffer);
+
+    expect(svg).toContain(ONE_PADDED_VIEWBOX);
+    expect(svg).toContain('width="348"');
+    expect(svg).toContain('height="248"');
+    // Guard against the double-padding regression directly: a second margin
+    // would show up as -48 -48 396 296.
+    expect(svg).not.toContain('viewBox="-48 -48 396 296"');
+  });
+
+  it("crops to the supplied viewport bounds when scope is viewport (FR-EXP-06)", async () => {
+    const { desktop, saves } = makeDesktop();
+    await exportDiagram(desktop, OBJECTS, [], "Network", {
+      format: "svg",
+      scope: "viewport",
+      viewportBounds: { x: 0, y: 0, width: 400, height: 300 },
+    });
+    const svg = decode(saves[0]!.data as ArrayBuffer);
+
+    expect(svg).toContain('viewBox="-24 -24 448 348"');
+    // Cropping changes the frame, not the contents: both objects still render,
+    // and anything outside the window is simply not shown.
+    expect(svg).toContain('id="a"');
+    expect(svg).toContain('id="b"');
+  });
+
+  it("falls back to content bounds when viewport scope is given no bounds", async () => {
+    const { desktop, saves } = makeDesktop();
+    await exportDiagram(desktop, OBJECTS, [], "Network", {
+      format: "svg",
+      scope: "viewport",
+    });
+    expect(decode(saves[0]!.data as ArrayBuffer)).toContain(ONE_PADDED_VIEWBOX);
   });
 });

@@ -4,7 +4,7 @@ import type {
   PdfOrientation,
   PdfPageSize,
 } from "../../../shared/ipc";
-import type { DiagramObject } from "../document/model";
+import type { BoundingBox, DiagramObject } from "../document/model";
 import { UNTITLED_DOCUMENT_TITLE } from "../document/empty-document";
 import { expandBounds } from "../editor/geometry";
 import { canvasEngine } from "../editor/canvas/adapter";
@@ -24,11 +24,16 @@ const EXPORT_PADDING = 24;
 /** JPEG has no alpha channel, so transparency has to composite onto something. */
 const JPEG_BACKGROUND = "#ffffff";
 
-export type ExportScope = "document" | "selection";
+export type ExportScope = "document" | "selection" | "viewport";
 
 export interface ExportRequest {
   format: ExportFormat;
   scope?: ExportScope;
+  /**
+   * World-space rectangle to crop to when `scope` is "viewport". Supplied by the
+   * caller because only it knows the canvas element's size and current pan.
+   */
+  viewportBounds?: BoundingBox;
   /** FR-EXP-14: raster multiplier. 1x-4x, or a DPI preset expressed as one. */
   scale?: number;
   /** FR-EXP-16: JPEG quality, 0-1. */
@@ -87,12 +92,19 @@ export async function exportDiagram(
 
   const objects = requireObjects(scoped, scope);
 
-  const bounds = canvasEngine.getContentBounds(objects);
-  if (!bounds) {
+  // Viewport scope crops to what is on screen rather than to the drawing's own
+  // extent (FR-EXP-06). Objects outside the frame still render; the viewBox is
+  // simply the window, which is what makes the crop work.
+  const contentBounds = canvasEngine.getContentBounds(objects);
+  if (!contentBounds) {
     throw new ExportError(
       "Could not measure the drawing, so there is nothing to export.",
     );
   }
+  const bounds =
+    scope === "viewport" && request.viewportBounds
+      ? request.viewportBounds
+      : contentBounds;
 
   const background =
     request.format === "jpeg"
@@ -101,10 +113,19 @@ export async function exportDiagram(
         : (request.background ?? JPEG_BACKGROUND)
       : (request.background ?? "transparent");
 
+  // Pad exactly once. `serializeObjectsToSvg` applies `padding` on top of
+  // whatever `bounds` it is given, so passing a pre-expanded bounds *and* a
+  // non-zero padding doubled the margin. That was not merely a cosmetic extra
+  // border: the raster canvas is sized from the singly-padded rect, so the SVG's
+  // aspect ratio no longer matched the canvas and drawImage stretched every PNG
+  // and JPEG export. Deriving `padded` once and sharing it keeps the SVG viewBox
+  // and the raster surface in exact agreement.
+  const padded = expandBounds(bounds, EXPORT_PADDING);
+
   const svg = canvasEngine.exportSvg(objects, {
     background,
-    padding: EXPORT_PADDING,
-    bounds: expandBounds(bounds, EXPORT_PADDING),
+    padding: 0,
+    bounds: padded,
   });
 
   let data: ArrayBuffer;
@@ -127,7 +148,6 @@ export async function exportDiagram(
 
     case "png":
     case "jpeg": {
-      const padded = expandBounds(bounds, EXPORT_PADDING);
       const blob = await canvasEngine.exportRaster(svg, {
         format: request.format,
         width: Math.max(Math.round(padded.width), 1),
