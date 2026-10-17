@@ -1208,6 +1208,21 @@ describe("Astryx Architecture Canvas — editing journey", () => {
     // Rewiring must not have duplicated or dropped the edge.
     expect(await connectorCount()).toBe(1);
 
+    /** Start and end y of a straight route's "M x y L x y". */
+    const endsOf = (d: string) => {
+      const numbers = d.match(/-?[\d.]+/g)?.map(Number) ?? [];
+      return { startY: numbers[1]!, endY: numbers[numbers.length - 1]! };
+    };
+
+    // Direction of travel rather than absolute coordinates, which grid snapping
+    // and the viewport origin both shift. The two shapes start level, so the ends
+    // share a y. A re-attachment that really landed on the third shape, drawn
+    // below them, must pull the target end underneath the source; re-attaching to
+    // the shape it already touched would leave them level and fail here.
+    expect(endsOf(pathBefore).endY).toBeCloseTo(endsOf(pathBefore).startY, 6);
+    const pathAfter = await connectorPath();
+    expect(endsOf(pathAfter).endY).toBeGreaterThan(endsOf(pathAfter).startY);
+
     await window.keyboard.press("Control+z");
     await waitFor(
       async () => (await connectorPath()) === pathBefore,
