@@ -14,6 +14,7 @@ import {
   type ResizeHandle,
 } from "../editor/geometry";
 import type { ShapeTool } from "../editor/factories";
+import type { ConnectorEndpoints } from "../editor/commands";
 
 /** TRD §14.5. */
 export type ActiveTool =
@@ -84,6 +85,20 @@ export type Interaction =
       sourcePortId?: string;
       /** Cursor position, so the rubber band tracks it between clicks. */
       currentWorld: Point;
+    }
+  | {
+      kind: "rewire";
+      connectorId: string;
+      /** Which end is being dragged. */
+      end: "source" | "target";
+      /**
+       * Both ends as they were before the gesture.
+       *
+       * Both, not just the dragged one: a drop on empty canvas restores from
+       * this, and undo replays it, so it has to be a complete pair rather than a
+       * partial patch that could leave the other end ambiguous.
+       */
+      from: ConnectorEndpoints;
     };
 
 export const SHAPE_TOOLS = [

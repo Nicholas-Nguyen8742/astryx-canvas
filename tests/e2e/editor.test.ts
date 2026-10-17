@@ -1159,6 +1159,106 @@ describe("Astryx Architecture Canvas — editing journey", () => {
     expect(await connectorCount()).toBe(1);
   });
 
+  it("re-attaches a connector end by dragging it onto another shape", async () => {
+    await drawShape("Rectangle", 100, 120, 1);
+    await drawShape("Rectangle", 320, 120, 2);
+    // A third shape, drawn before wiring so that selecting the connector is the
+    // last thing that happens and its endpoint handles are still on screen.
+    await drawShape("Rectangle", 320, 300, 3);
+
+    await window
+      .getByRole("button", { name: "Connector", exact: true })
+      .click();
+    await clickShapeCentre(100, 120);
+    await clickShapeCentre(320, 120);
+    await waitFor(
+      async () => (await connectorCount()) === 1,
+      "the connector to be created",
+    );
+
+    const box = await canvasBox();
+    // Selecting the connector is what makes its ends draggable, and is also the
+    // only visible sign that it is selected at all.
+    await window.mouse.click(box.x + 280, box.y + 165);
+    const handles = window.locator("svg circle.canvas-endpoint-handle");
+    await waitFor(
+      async () => (await handles.count()) === 2,
+      "both endpoint handles to appear",
+    );
+
+    const pathBefore = await connectorPath();
+
+    // The second handle is the target end. Drag it onto the third shape.
+    const target = handles.nth(1);
+    const targetBox = await target.boundingBox();
+    if (!targetBox)
+      throw new Error("Endpoint handle reported no bounding box.");
+    await drag(
+      {
+        x: targetBox.x + targetBox.width / 2,
+        y: targetBox.y + targetBox.height / 2,
+      },
+      { x: box.x + 390, y: box.y + 345 },
+    );
+
+    await waitFor(
+      async () => (await connectorPath()) !== pathBefore,
+      "the connector to be re-attached",
+    );
+    // Rewiring must not have duplicated or dropped the edge.
+    expect(await connectorCount()).toBe(1);
+
+    await window.keyboard.press("Control+z");
+    await waitFor(
+      async () => (await connectorPath()) === pathBefore,
+      "undo to put the end back where it started",
+    );
+  });
+
+  it("cancels a rewire dropped on empty canvas instead of detaching the end", async () => {
+    await drawShape("Rectangle", 100, 120, 1);
+    await drawShape("Rectangle", 320, 120, 2);
+    await window
+      .getByRole("button", { name: "Connector", exact: true })
+      .click();
+    await clickShapeCentre(100, 120);
+    await clickShapeCentre(320, 120);
+    await waitFor(
+      async () => (await connectorCount()) === 1,
+      "the connector to be created",
+    );
+
+    const box = await canvasBox();
+    await window.mouse.click(box.x + 280, box.y + 165);
+    const handles = window.locator("svg circle.canvas-endpoint-handle");
+    await waitFor(
+      async () => (await handles.count()) === 2,
+      "both endpoint handles to appear",
+    );
+    const pathBefore = await connectorPath();
+
+    const target = handles.nth(1);
+    const targetBox = await target.boundingBox();
+    if (!targetBox)
+      throw new Error("Endpoint handle reported no bounding box.");
+    // Well clear of every shape, so there is nothing to attach to.
+    await drag(
+      {
+        x: targetBox.x + targetBox.width / 2,
+        y: targetBox.y + targetBox.height / 2,
+      },
+      { x: box.x + 280, y: box.y + 470 },
+    );
+
+    await window.waitForTimeout(200);
+    // The end snaps back rather than being left floating: a free endpoint is
+    // representable in the format but nothing else in the UI produces or marks
+    // one, so an accidental drop should not silently create it.
+    expect(await connectorPath()).toBe(pathBefore);
+    // And nothing was recorded, so the next undo still belongs to an earlier edit.
+    expect(await connectorCount()).toBe(1);
+  });
+
   // Runs last: a failure here means one of the journeys above threw inside React.
   it("produces no renderer errors across the whole journey", () => {
     expect(pageErrors.map((error) => error.message)).toEqual([]);

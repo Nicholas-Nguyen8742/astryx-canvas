@@ -18,6 +18,7 @@ import type {
   Transform,
 } from "../../document/model";
 import {
+  containsPoint,
   intersects,
   nearestPort,
   objectBounds,
@@ -44,9 +45,11 @@ import {
   MoveObjectsCommand,
   ReorderObjectsCommand,
   ResizeObjectCommand,
+  RewireConnectorCommand,
   UpdateConnectorLabelCommand,
   UpdateContentCommand,
 } from "../commands/object-commands";
+import type { ConnectorEndpoints } from "../commands";
 import { copyObjects, pasteObjects } from "../clipboard";
 import type { ZOrderMove } from "../z-order";
 import { useDocumentStore } from "../../state/document-store";
@@ -84,6 +87,8 @@ const HANDLE_SCREEN_SIZE = 8;
  */
 const PORT_SNAP_SCREEN_PX = 12;
 const PORT_HANDLE_SCREEN_R = 4;
+/** Radius of the draggable handle shown on each end of a selected connector. */
+const ENDPOINT_HANDLE_SCREEN_R = 5;
 /**
  * Width of the inline field for a connector label, in world units.
  *
@@ -146,6 +151,33 @@ function handleOffset(handle: ResizeHandle): Point {
     x: handle.includes("w") ? 0 : handle.includes("e") ? 1 : 0.5,
     y: handle.includes("n") ? 0 : handle.includes("s") ? 1 : 0.5,
   };
+}
+
+/**
+ * Whether two endpoints name the same attachment.
+ *
+ * Written out field by field rather than by serialising both sides: an endpoint
+ * is small and flat, and a structural compare makes it obvious that `portId` and
+ * a fallback point both count. Getting this wrong is not cosmetic — it is the
+ * difference between a dropped rewire recording an undo entry and restoring the
+ * original, and a no-op drag doing the same.
+ */
+function sameEndpoint(a: ConnectorEndpoint, b: ConnectorEndpoint): boolean {
+  return (
+    a.objectId === b.objectId &&
+    a.portId === b.portId &&
+    a.fallbackPoint?.x === b.fallbackPoint?.x &&
+    a.fallbackPoint?.y === b.fallbackPoint?.y
+  );
+}
+
+function sameEndpoints(a: ConnectorEndpoints, b: ConnectorEndpoints): boolean {
+  return (
+    (!a.source || !b.source || sameEndpoint(a.source, b.source)) &&
+    (!a.target || !b.target || sameEndpoint(a.target, b.target)) &&
+    Boolean(a.source) === Boolean(b.source) &&
+    Boolean(a.target) === Boolean(b.target)
+  );
 }
 
 /**
@@ -419,6 +451,9 @@ export function SvgCanvas() {
   const objectIndex = useMemo(() => indexObjects(objects), [objects]);
   const viewport = useEditorStore((state) => state.viewport);
   const selection = useEditorStore((state) => state.selection);
+  const connectorSelection = useEditorStore(
+    (state) => state.connectorSelection,
+  );
   const activeTool = useEditorStore((state) => state.activeTool);
   const grid = useEditorStore((state) => state.grid);
   const interaction = useEditorStore((state) => state.interaction);
@@ -627,6 +662,37 @@ export function SvgCanvas() {
     [],
   );
 
+  /**
+   * Resolves where a dragged connector end should attach.
+   *
+   * Ports are checked across every shape before any shape's body is, because a
+   * port is a small deliberate target and a neighbouring shape's body would
+   * otherwise swallow it. Within each pass the search runs backwards, so the
+   * topmost shape in paint order wins.
+   *
+   * Returns null over empty canvas, and the caller then cancels the rewire rather
+   * than leaving the end floating. A free endpoint is representable in the
+   * format, but nothing else in the UI creates one or marks it as detached, so an
+   * accidental drop on empty space should not silently produce it.
+   */
+  const endpointAt = (world: Point): ConnectorEndpoint | null => {
+    const tolerance = PORT_SNAP_SCREEN_PX / viewport.zoom;
+    for (let index = objects.length - 1; index >= 0; index -= 1) {
+      const object = objects[index]!;
+      if (!object.visible || object.locked) continue;
+      const port = nearestPort(object, world, tolerance);
+      if (port) return { objectId: object.id, portId: port.portId };
+    }
+    for (let index = objects.length - 1; index >= 0; index -= 1) {
+      const object = objects[index]!;
+      if (!object.visible || object.locked) continue;
+      if (containsPoint(objectBounds(object), world)) {
+        return { objectId: object.id };
+      }
+    }
+    return null;
+  };
+
   const onPointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
     const store = useEditorStore.getState();
     const screen = toScreen(event);
@@ -642,6 +708,12 @@ export function SvgCanvas() {
         .closest("[data-connector-id]")
         ?.getAttribute("data-connector-id") ??
       null;
+    // An endpoint handle is its own element, not a child of the connector's
+    // group, so it names its owner directly. Tested before the connector-body
+    // branch below, or grabbing an end would only select the connector.
+    const endpointEnd = target.getAttribute("data-connector-endpoint") as
+      "source" | "target" | null;
+    const endpointOwnerId = target.getAttribute("data-endpoint-of");
 
     const startPan = () => {
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -736,6 +808,27 @@ export function SvgCanvas() {
           // A circle must stay round; see ResizeConstraints.square. Resolved
           // here rather than per pointermove so the drag does no extra lookup.
           square: found.type === "circle",
+        });
+        return;
+      }
+    }
+
+    // Dragging an endpoint re-attaches it. Unlike the two-click wiring gesture
+    // this one *does* take pointer capture, because it is a single
+    // press-drag-release: capture is what keeps delivering moves once the cursor
+    // leaves the small handle, and there is no second click to retarget.
+    if (endpointEnd && endpointOwnerId) {
+      const doc = useDocumentStore.getState();
+      const from = doc.getConnectorEndpoints([endpointOwnerId])[
+        endpointOwnerId
+      ];
+      if (from) {
+        event.currentTarget.setPointerCapture(event.pointerId);
+        store.setInteraction({
+          kind: "rewire",
+          connectorId: endpointOwnerId,
+          end: endpointEnd,
+          from,
         });
         return;
       }
@@ -845,6 +938,21 @@ export function SvgCanvas() {
         });
         break;
       }
+
+      case "rewire": {
+        // The dragged end follows the cursor when there is nothing to attach to,
+        // so the user sees the line detached rather than frozen in place. Snapping
+        // onto a shape or port the moment one is in range is the feedback that
+        // says the drop will take.
+        const next = endpointAt(world) ?? {
+          objectId: "",
+          fallbackPoint: world,
+        };
+        const patch: ConnectorEndpoints =
+          current.end === "source" ? { source: next } : { target: next };
+        doc.setConnectorEndpoints({ [current.connectorId]: patch });
+        break;
+      }
     }
   };
 
@@ -923,6 +1031,33 @@ export function SvgCanvas() {
             ),
           );
         }
+        break;
+      }
+
+      case "rewire": {
+        const after = doc.getConnectorEndpoints([current.connectorId])[
+          current.connectorId
+        ];
+        const dragged = after?.[current.end];
+        // Three ways this ends without a history entry, and all three have to
+        // restore the original pair because the drag wrote to the document live:
+        // the connector vanished mid-drag, the drop landed on empty canvas and
+        // left the end detached, or the end was put back where it started.
+        const attached = Boolean(dragged && dragged.objectId !== "");
+        if (!after || !attached || sameEndpoints(after, current.from)) {
+          doc.setConnectorEndpoints({
+            [current.connectorId]: current.from,
+          });
+          break;
+        }
+        hist.commit(
+          new RewireConnectorCommand(
+            doc,
+            current.connectorId,
+            current.from,
+            after,
+          ),
+        );
         break;
       }
 
@@ -1287,6 +1422,47 @@ export function SvgCanvas() {
               />
             );
           })}
+
+          {/* Draggable ends of a selected connector. These are also the only
+              indication that a connector is selected at all: a connector has no
+              box to draw an outline around, so without them selecting one would
+              look exactly like not selecting it. Suppressed outside the select
+              tool for the same reason the resize handles are — they sit on shape
+              perimeters, where the wiring tool needs those clicks for itself. */}
+          {activeTool === "select"
+            ? connectors
+                .filter((connector) =>
+                  connectorSelection.includes(connector.id),
+                )
+                .flatMap((connector) => {
+                  const resolved = resolvedConnectors.get(connector.id);
+                  if (!resolved) return [];
+                  return (["source", "target"] as const).map((end) => {
+                    const point =
+                      end === "source" ? resolved.start : resolved.end;
+                    return (
+                      <circle
+                        key={`${connector.id}-${end}`}
+                        // Not `data-connector-id`: that attribute has to keep
+                        // selecting exactly the connectors, or every query for
+                        // "the connectors on this page" silently counts two
+                        // handles per selected one. The relationship is real, so
+                        // it gets its own name.
+                        data-endpoint-of={connector.id}
+                        data-connector-endpoint={end}
+                        className="canvas-endpoint-handle"
+                        cx={point.x}
+                        cy={point.y}
+                        r={ENDPOINT_HANDLE_SCREEN_R / viewport.zoom}
+                        style={{
+                          cursor: "crosshair",
+                          pointerEvents: "all",
+                        }}
+                      />
+                    );
+                  });
+                })
+            : null}
 
           {/* Suppressed while wiring. The edge handles sit at the box's edge
               midpoints — the same coordinates as the n/e/s/w ports — and carry

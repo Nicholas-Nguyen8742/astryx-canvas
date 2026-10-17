@@ -108,3 +108,18 @@ body {
     stroke-width: 1;
     vector-effect: non-scaling-stroke;
 }
+
+/*
+ * Draggable ends of a selected connector.
+ *
+ * Deliberately the inverse of .canvas-port. A port is a place an edge may attach;
+ * an endpoint handle is an edge already attached and being moved. Filling one and
+ * outlining the other keeps them distinguishable when they overlap, which they do,
+ * because a pinned endpoint sits exactly on the port it is pinned to.
+ */
+.canvas-endpoint-handle {
+    fill: var(--color-accent);
+    stroke: var(--color-background-surface);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+}
