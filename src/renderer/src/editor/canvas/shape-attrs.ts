@@ -22,7 +22,8 @@ export function resolveColor(
   return color.hex;
 }
 
-export type ShapeElement = "rect" | "ellipse" | "line" | "text" | "g";
+export type ShapeElement =
+  "rect" | "ellipse" | "line" | "text" | "polygon" | "g";
 
 /**
  * Single shared arrowhead marker.
@@ -80,6 +81,37 @@ function rotateAttr(object: DiagramObject): string | undefined {
 }
 
 /**
+ * Vertices of the polygon-backed shapes, inscribed in the object's bounding box.
+ *
+ * Inscribing is not a stylistic choice: `objectBounds` reports the transform box,
+ * and the selection outline, hit testing, marquee selection and export framing
+ * all trust that box. A polygon drawn smaller than it would leave a visible gap
+ * between the shape and its resize handles, and export would crop to air.
+ */
+function polygonPoints(
+  type: "diamond" | "triangle",
+  transform: Transform,
+): string {
+  const { x, y } = transform;
+  const width = Math.max(transform.width, 0);
+  const height = Math.max(transform.height, 0);
+  const vertices: ReadonlyArray<readonly [number, number]> =
+    type === "diamond"
+      ? [
+          [x + width / 2, y],
+          [x + width, y + height / 2],
+          [x + width / 2, y + height],
+          [x, y + height / 2],
+        ]
+      : [
+          [x + width / 2, y],
+          [x + width, y + height],
+          [x, y + height],
+        ];
+  return vertices.map(([px, py]) => `${px},${py}`).join(" ");
+}
+
+/**
  * Maps a document object to the SVG element and attributes that draw it.
  *
  * Both the live React canvas and the export serializer go through here, so a
@@ -118,6 +150,16 @@ export function shapeGeometry(
           cy: transform.y + transform.height / 2,
           rx: Math.max(transform.width / 2, 0),
           ry: Math.max(transform.height / 2, 0),
+        },
+      };
+
+    case "diamond":
+    case "triangle":
+      return {
+        element: "polygon",
+        attrs: {
+          ...shared,
+          points: polygonPoints(object.type, transform),
         },
       };
 

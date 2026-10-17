@@ -56,12 +56,23 @@ export function identityTransform(
 
 /** Tools that can be dragged out on the canvas (TRD §14.5). */
 export type ShapeTool =
-  "rectangle" | "roundedRectangle" | "ellipse" | "text" | "line" | "arrow";
+  | "rectangle"
+  | "roundedRectangle"
+  | "ellipse"
+  | "circle"
+  | "diamond"
+  | "triangle"
+  | "text"
+  | "line"
+  | "arrow";
 
 const TOOL_TO_OBJECT_TYPE: Record<ShapeTool, ObjectType> = {
   rectangle: "rectangle",
   roundedRectangle: "roundedRectangle",
   ellipse: "ellipse",
+  circle: "circle",
+  diamond: "diamond",
+  triangle: "triangle",
   text: "text",
   line: "line",
   arrow: "arrow",
@@ -71,6 +82,9 @@ const DEFAULT_SIZES: Record<ShapeTool, { width: number; height: number }> = {
   rectangle: { width: 160, height: 100 },
   roundedRectangle: { width: 160, height: 100 },
   ellipse: { width: 140, height: 140 },
+  circle: { width: 140, height: 140 },
+  diamond: { width: 140, height: 140 },
+  triangle: { width: 140, height: 120 },
   text: { width: 200, height: 40 },
   line: { width: 160, height: 0 },
   arrow: { width: 160, height: 0 },
@@ -169,12 +183,63 @@ export function normaliseDragTransform(
     };
   }
 
+  // A circle is a square drag: the longer axis wins and the shape grows from the
+  // corner the user pressed, not from the midpoint of an implied diagonal.
+  if (tool === "circle") {
+    const longest = Math.max(Math.abs(dx), Math.abs(dy));
+    const side = longest < 4 ? fallback.width : longest;
+    return identityTransform(
+      dx < 0 ? start.x - side : start.x,
+      dy < 0 ? start.y - side : start.y,
+      side,
+      side,
+    );
+  }
+
   return identityTransform(
     Math.min(start.x, end.x),
     Math.min(start.y, end.y),
     Math.abs(dx) < 4 ? fallback.width : Math.abs(dx),
     Math.abs(dy) < 4 ? fallback.height : Math.abs(dy),
   );
+}
+
+/** Stable id for the drag preview, which is never inserted into the document. */
+export const PREVIEW_ID = "__preview__";
+
+/**
+ * Builds the throwaway object used to draw a shape while it is being dragged out.
+ *
+ * Deliberately not `createObject`: the preview re-renders on every pointermove,
+ * and minting a fresh id per frame would churn the id counter for something
+ * discarded unless the gesture completes. Routing the preview through
+ * `shapeGeometry` with a real object is what keeps it pixel-identical to the
+ * committed shape, instead of a second approximation that can drift.
+ *
+ * Stroke colour is intentionally absent. The `.canvas-preview` rule owns it, and
+ * a CSS declaration beats an SVG presentation attribute — so setting it here too
+ * would create a second source of truth that silently loses, and the preview
+ * would stop following the committed default the moment either one changed.
+ */
+export function previewObject(
+  tool: ShapeTool,
+  transform: Transform,
+): DiagramObject {
+  return {
+    id: PREVIEW_ID,
+    type: TOOL_TO_OBJECT_TYPE[tool],
+    zIndex: 0,
+    visible: true,
+    locked: true,
+    transform,
+    style: {
+      strokeWidth: 2,
+      opacity: 0.7,
+      dashArray: [6, 4],
+      text: { fontSize: 14, textAlign: "center" },
+    },
+    content: tool === "text" ? { value: "Text" } : undefined,
+  };
 }
 
 /**

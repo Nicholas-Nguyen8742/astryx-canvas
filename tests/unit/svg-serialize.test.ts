@@ -196,3 +196,83 @@ describe("line and arrow export", () => {
     expect(svg).toContain('y2="50"');
   });
 });
+
+describe("circle, diamond and triangle export (FR-OBJ-01)", () => {
+  it("draws a circle as an ellipse with equal radii", () => {
+    const circle = createObject("circle", identityTransform(0, 0, 80, 80));
+    const svg = serializeObjectsToSvg([circle]);
+    expect(svg).toContain("<ellipse ");
+    expect(svg).toContain('cx="40"');
+    expect(svg).toContain('cy="40"');
+    expect(svg).toContain('rx="40"');
+    expect(svg).toContain('ry="40"');
+  });
+
+  it("keeps a circle drag square, anchored at the corner that was pressed", () => {
+    const dragged = normaliseDragTransform(
+      { x: 10, y: 10 },
+      { x: 60, y: 30 },
+      "circle",
+    );
+    expect(dragged).toMatchObject({ x: 10, y: 10, width: 50, height: 50 });
+  });
+
+  it("grows a circle from the pressed corner when dragged up and to the left", () => {
+    const dragged = normaliseDragTransform(
+      { x: 60, y: 60 },
+      { x: 10, y: 20 },
+      "circle",
+    );
+    // The longer axis wins (50 over 40) and the box still covers the whole
+    // gesture rather than escaping off the corner the user dragged toward.
+    expect(dragged).toMatchObject({ x: 10, y: 10, width: 50, height: 50 });
+  });
+
+  it("falls back to a square default for a circle click without a drag", () => {
+    const dragged = normaliseDragTransform(
+      { x: 10, y: 10 },
+      { x: 11, y: 11 },
+      "circle",
+    );
+    expect(dragged.width).toBe(dragged.height);
+    expect(dragged.width).toBeGreaterThan(0);
+  });
+
+  it("draws a diamond as a polygon on the four edge midpoints", () => {
+    const diamond = createObject("diamond", identityTransform(0, 0, 80, 40));
+    const svg = serializeObjectsToSvg([diamond]);
+    expect(svg).toContain("<polygon ");
+    expect(svg).toContain('points="40,0 80,20 40,40 0,20"');
+  });
+
+  it("draws a triangle as a polygon with a top apex and a full-width base", () => {
+    const triangle = createObject("triangle", identityTransform(0, 0, 80, 40));
+    const svg = serializeObjectsToSvg([triangle]);
+    expect(svg).toContain("<polygon ");
+    expect(svg).toContain('points="40,0 80,40 0,40"');
+  });
+
+  it("inscribes polygons in the bounding box so framing and handles agree", () => {
+    // Vertices must reach every edge of the transform box. If they did not, the
+    // selection outline and the export viewBox would both frame empty space
+    // around a shape visibly smaller than its own resize handles.
+    const diamond = createObject("diamond", identityTransform(10, 20, 80, 40));
+    expect(serializeObjectsToSvg([diamond])).toContain(
+      'points="50,20 90,40 50,60 10,40"',
+    );
+  });
+
+  it("paints polygons with the shape fill and stroke rather than a bare outline", () => {
+    const triangle = createObject("triangle", identityTransform(0, 0, 80, 40));
+    const svg = serializeObjectsToSvg([triangle]);
+    expect(svg).toContain('fill="#ffffff"');
+    expect(svg).toContain('stroke="#1b1b1b"');
+  });
+
+  it("never emits NaN vertices for a degenerate zero-size box", () => {
+    const collapsed = createObject("diamond", identityTransform(5, 5, 0, 0));
+    const svg = serializeObjectsToSvg([collapsed]);
+    expect(svg).not.toContain("NaN");
+    expect(svg).toContain('points="5,5 5,5 5,5 5,5"');
+  });
+});

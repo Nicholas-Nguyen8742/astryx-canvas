@@ -16,6 +16,9 @@ export type ActiveTool =
   | "rectangle"
   | "roundedRectangle"
   | "ellipse"
+  | "circle"
+  | "diamond"
+  | "triangle"
   | "line"
   | "arrow"
   | "connector"
@@ -58,6 +61,9 @@ export const SHAPE_TOOLS = [
   "rectangle",
   "roundedRectangle",
   "ellipse",
+  "circle",
+  "diamond",
+  "triangle",
   "text",
   "line",
   "arrow",
