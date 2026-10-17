@@ -235,9 +235,38 @@ by the lockfile plus this recorded, scoped assessment.
 
 ---
 
+## 12. `polyline` is deferred to the connector milestone (FR-OBJ-01)
+
+FR-OBJ-01 lists `polyline` as a MUST object type. It is **not yet implemented**,
+while the other MUST shapes (`rectangle`, `roundedRectangle`, `ellipse`,
+`circle`, `diamond`, `triangle`, `text`, `line`, `arrow`) are.
+
+The reason is interaction model, not effort. Every other shape is a single
+press-drag-release gesture. A polyline is click-per-vertex with an open
+gesture that is terminated deliberately — the same model connectors require
+(FR-CONN-01, FR-CONN-03). Building it now would mean either:
+
+- a second, throwaway multi-point interaction that gets replaced when
+  connectors land, or
+- one multi-point interaction built for polylines that connectors then have to
+  be bent around.
+
+Both are worse than shipping the two together. `polyline` and `path` remain
+valid `ObjectType` values in the schema (§12.1) and round-trip through
+save/load, so no format change is needed when they arrive. Until then a
+hand-authored document containing one falls through to the rectangle branch of
+`shapeGeometry`, which draws a bounding box rather than the vertices — an
+acknowledged gap, not a silent corruption.
+
+---
+
 ## Still to fold back into the TRD
 
 The document itself has not been revised. If it is updated, sections needing
 correction are: §9 (stack table — StyleX plugin, Fabric, jsPDF, TypeScript),
 §9.1 (canvas engine and adapter interface), §11.1 (token API), §11.6 (font
 bundling), §15.4 (PDF strategy), §24 (project layout).
+
+FR-OBJ-01 should also note that `polyline` shares its interaction model with
+the connector requirements, so the two are sequenced together rather than
+delivered shape-by-shape.
