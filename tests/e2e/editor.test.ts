@@ -1111,6 +1111,54 @@ describe("Astryx Architecture Canvas — editing journey", () => {
     expect(await sourceAnchor()).toBe(anchorBefore);
   });
 
+  /** The label rendered inside a connector's group, or "" when it has none. */
+  async function connectorLabel(): Promise<string> {
+    const text = connectorNodes().first().locator("text");
+    return (await text.count()) > 0
+      ? ((await text.textContent()) ?? "").trim()
+      : "";
+  }
+
+  it("edits a connector label inline and undoes it as one step", async () => {
+    await wireTwoShapes();
+    expect(await connectorLabel()).toBe("");
+
+    // Midway along the line between the two shapes.
+    const box = await canvasBox();
+    await window.mouse.dblclick(box.x + 280, box.y + 165);
+
+    const editor = window.locator(".canvas-host textarea");
+    await waitFor(
+      async () => (await editor.count()) === 1,
+      "the connector label editor to open",
+    );
+
+    await editor.fill("HTTPS");
+    // Blurring commits, exactly as it does for an object label: the two share one
+    // overlay, including the guard that stops the blur fired by an Escape cancel
+    // from committing the draft the user just rejected.
+    await window
+      .locator(".canvas-host svg")
+      .click({ position: { x: 4, y: 4 } });
+    await waitFor(
+      async () => (await window.locator(".canvas-host textarea").count()) === 0,
+      "the editor to close",
+    );
+    await waitFor(
+      async () => (await connectorLabel()) === "HTTPS",
+      "the label to render on the canvas",
+    );
+
+    // One undo removes the whole edit rather than one keystroke of it.
+    await window.keyboard.press("Control+z");
+    await waitFor(
+      async () => (await connectorLabel()) === "",
+      "undo to remove the label",
+    );
+    // Losing its label must not cost the connector its existence.
+    expect(await connectorCount()).toBe(1);
+  });
+
   // Runs last: a failure here means one of the journeys above threw inside React.
   it("produces no renderer errors across the whole journey", () => {
     expect(pageErrors.map((error) => error.message)).toEqual([]);

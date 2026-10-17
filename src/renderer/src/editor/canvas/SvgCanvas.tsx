@@ -44,6 +44,7 @@ import {
   MoveObjectsCommand,
   ReorderObjectsCommand,
   ResizeObjectCommand,
+  UpdateConnectorLabelCommand,
   UpdateContentCommand,
 } from "../commands/object-commands";
 import { copyObjects, pasteObjects } from "../clipboard";
@@ -58,6 +59,7 @@ import {
 import {
   ARROW_MARKER_BOX,
   ARROW_MARKER_SHAPES,
+  CONNECTOR_LABEL_FONT_SIZE,
   arrowMarkerId,
   connectorAttrs,
   connectorLabelAttrs,
@@ -69,7 +71,7 @@ import {
   resolveConnectors,
   type ResolvedConnector,
 } from "../connectors";
-import { TextEditorOverlay } from "./TextEditorOverlay";
+import { TextEditorOverlay, type TextEditorTarget } from "./TextEditorOverlay";
 
 /** Handle edge length in screen pixels, so handles stay grabbable at any zoom. */
 const HANDLE_SCREEN_SIZE = 8;
@@ -82,6 +84,14 @@ const HANDLE_SCREEN_SIZE = 8;
  */
 const PORT_SNAP_SCREEN_PX = 12;
 const PORT_HANDLE_SCREEN_R = 4;
+/**
+ * Width of the inline field for a connector label, in world units.
+ *
+ * A connector has no box of its own to size the field to, unlike a text object,
+ * so this is a fixed editing affordance rather than something derived from the
+ * document.
+ */
+const CONNECTOR_LABEL_FIELD_WIDTH = 160;
 /** A line has no fill to click, so it gets an invisible constant-width hit stroke. */
 const LINE_HIT_WIDTH = 12;
 /** Arrow-key nudge step in world units; Shift multiplies it (FR-OBJ-14/15). */
@@ -1004,10 +1014,56 @@ export function SvgCanvas() {
       )
     : undefined;
 
+  const editingConnector = editingId
+    ? connectors.find((connector) => connector.id === editingId)
+    : undefined;
+  // Without a resolved path there is no anchor to place the field at, which
+  // happens when the connector's endpoint object was deleted mid-edit.
+  const editingConnectorAnchor = editingConnector
+    ? resolvedConnectors.get(editingConnector.id)?.labelAnchor
+    : undefined;
+
+  const editingTarget: TextEditorTarget | undefined = editingObject
+    ? (() => {
+        const worldFontSize = editingObject.style.text?.fontSize ?? 14;
+        return {
+          initialValue: editingObject.content?.value ?? "",
+          origin: {
+            x: editingObject.transform.x,
+            y: editingObject.transform.y,
+          },
+          worldWidth: editingObject.transform.width,
+          worldFontSize,
+          // Zoom cancels out of the ratio, so rows do not change with it.
+          rows: Math.max(
+            1,
+            Math.round(editingObject.transform.height / (worldFontSize * 1.4)),
+          ),
+          ariaLabel: `Edit the label for ${editingObject.name ?? "this object"}`,
+        };
+      })()
+    : editingConnector && editingConnectorAnchor
+      ? {
+          initialValue: editingConnector.label?.value ?? "",
+          // Centred on the anchor, matching how the label itself is drawn: the
+          // text is middle-anchored, so a top-left-aligned field would sit off to
+          // one side of the line it edits.
+          origin: {
+            x: editingConnectorAnchor.x - CONNECTOR_LABEL_FIELD_WIDTH / 2,
+            y: editingConnectorAnchor.y - CONNECTOR_LABEL_FONT_SIZE,
+          },
+          worldWidth: CONNECTOR_LABEL_FIELD_WIDTH,
+          worldFontSize:
+            editingConnector.label?.style?.fontSize ??
+            CONNECTOR_LABEL_FONT_SIZE,
+          rows: 1,
+          ariaLabel: "Edit the label for this connector",
+        }
+      : undefined;
+
   /**
-   * Double-click starts an inline label edit (FR-TEXT-02). Restricted to text
-   * objects: a shape can carry a label in the document model, but nothing renders
-   * one yet, so editing a shape's label would change data the user cannot see.
+   * Double-click starts an inline label edit (FR-TEXT-02), for a text object or
+   * for a connector.
    */
   const onDoubleClick = (event: ReactMouseEvent<SVGSVGElement>) => {
     // `event.target` cannot be trusted here. The pointerdown that preceded this
@@ -1017,22 +1073,50 @@ export function SvgCanvas() {
     // Hit-testing the coordinates goes through the layout instead and is
     // unaffected by capture. (onPointerDown does not have this problem: it reads
     // target before requesting capture.)
-    const objectId =
-      document
-        .elementsFromPoint(event.clientX, event.clientY)
-        .map((element) => element.closest("[data-object-id]"))
-        .find((element): element is Element => element !== null)
-        ?.getAttribute("data-object-id") ?? null;
-
-    if (!objectId) return;
-
-    const object = objects.find((candidate) => candidate.id === objectId);
-    if (!object || object.locked || !object.visible || object.type !== "text")
-      return;
-
     const editor = useEditorStore.getState();
-    editor.setSelection([objectId]);
-    editor.setEditing(objectId);
+
+    // Walked in paint order, topmost first, and resolved per element rather than
+    // by filtering the whole list for one attribute. Connectors paint above
+    // shapes, so a double-click on a line crossing a shape has to resolve to the
+    // connector; collecting every object id first would find the shape
+    // underneath and open the wrong editor.
+    for (const element of document.elementsFromPoint(
+      event.clientX,
+      event.clientY,
+    )) {
+      const connectorId = element
+        .closest("[data-connector-id]")
+        ?.getAttribute("data-connector-id");
+      if (connectorId) {
+        const connector = connectors.find(
+          (candidate) => candidate.id === connectorId,
+        );
+        if (!connector || connector.locked || !connector.visible) return;
+        editor.setConnectorSelection([connectorId]);
+        editor.setEditing(connectorId);
+        return;
+      }
+
+      const objectId = element
+        .closest("[data-object-id]")
+        ?.getAttribute("data-object-id");
+      if (objectId) {
+        const object = objects.find((candidate) => candidate.id === objectId);
+        // Restricted to text objects: a shape can carry a label in the document
+        // model, but nothing renders one yet, so editing a shape's label would
+        // change data the user cannot see.
+        if (
+          !object ||
+          object.locked ||
+          !object.visible ||
+          object.type !== "text"
+        )
+          return;
+        editor.setSelection([objectId]);
+        editor.setEditing(objectId);
+        return;
+      }
+    }
   };
 
   const handleTextCommit = useCallback((value: string) => {
@@ -1042,13 +1126,32 @@ export function SvgCanvas() {
     if (!id) return;
 
     const doc = useDocumentStore.getState();
+    const hist = useHistoryStore.getState();
+    const page = doc.document.pages.find((p) => p.id === doc.activePageId);
+
+    // Object ids and connector ids are disjoint, so which collection the edit
+    // lands in is settled by lookup rather than by carrying a kind flag on the
+    // store alongside the id.
+    if ((page?.connectors ?? []).some((entry) => entry.id === id)) {
+      const from = doc.getConnectorLabels([id]);
+      if ((from[id]?.value ?? "") === value) return;
+      hist.execute(
+        new UpdateConnectorLabelCommand(doc, [id], from, {
+          // Empty clears the label rather than storing a blank one, so the saved
+          // document does not accumulate empty TextContent shells.
+          [id]: value.length > 0 ? { value } : undefined,
+        }),
+      );
+      return;
+    }
+
     const from = doc.getContents([id]);
     // An unchanged label must not create an undo entry.
     if ((from[id]?.value ?? "") === value) return;
 
-    useHistoryStore
-      .getState()
-      .execute(new UpdateContentCommand(doc, [id], from, { [id]: { value } }));
+    hist.execute(
+      new UpdateContentCommand(doc, [id], from, { [id]: { value } }),
+    );
   }, []);
 
   const handleTextCancel = useCallback(() => {
@@ -1227,9 +1330,9 @@ export function SvgCanvas() {
         ) : null}
       </svg>
 
-      {editingObject ? (
+      {editingTarget ? (
         <TextEditorOverlay
-          object={editingObject}
+          target={editingTarget}
           viewport={viewport}
           onCommit={handleTextCommit}
           onCancel={handleTextCancel}

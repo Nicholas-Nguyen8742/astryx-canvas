@@ -187,8 +187,13 @@ export function connectorAttrs(
   return attrs;
 }
 
-/** Size for a connector label whose TextContent carries no style of its own. */
-const CONNECTOR_LABEL_FONT_SIZE = 12;
+/**
+ * Size for a connector label whose TextContent carries no style of its own.
+ *
+ * Exported because the inline editor sizes its field from the same number; two
+ * copies would let the field and the rendered label disagree.
+ */
+export const CONNECTOR_LABEL_FONT_SIZE = 12;
 
 /**
  * Attributes for a connector's label.

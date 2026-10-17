@@ -2,11 +2,33 @@ import { useEffect, useRef, useState } from "react";
 
 import { TextArea } from "@astryxdesign/core/TextArea";
 
-import type { DiagramObject, Viewport } from "../../document/model";
+import type { Point, Viewport } from "../../document/model";
 import { worldToScreen } from "../geometry";
 
+/**
+ * What to edit and where to put the field, in terms both call sites share.
+ *
+ * Deliberately not a `DiagramObject`. Connector labels need the same editor, and
+ * the part that is easy to get wrong — Escape cancelling and then blur committing
+ * the rejected draft anyway — has to exist once rather than once per editable
+ * kind. Callers reduce their own geometry to this shape.
+ */
+export interface TextEditorTarget {
+  /** Text the field opens with. */
+  initialValue: string;
+  /** World point the field's top-left sits at. */
+  origin: Point;
+  /** Field width in world units, scaled by zoom here. */
+  worldWidth: number;
+  /** Font size in world units, scaled by zoom here. */
+  worldFontSize: number;
+  rows: number;
+  /** Accessible name for the field. */
+  ariaLabel: string;
+}
+
 interface TextEditorOverlayProps {
-  object: DiagramObject;
+  target: TextEditorTarget;
   viewport: Viewport;
   onCommit: (value: string) => void;
   onCancel: () => void;
@@ -28,12 +50,12 @@ interface TextEditorOverlayProps {
  * div for layout" rule in AGENTS.md stays intact.
  */
 export function TextEditorOverlay({
-  object,
+  target,
   viewport,
   onCommit,
   onCancel,
 }: TextEditorOverlayProps) {
-  const [draft, setDraft] = useState(object.content?.value ?? "");
+  const [draft, setDraft] = useState(target.initialValue);
   const areaRef = useRef<HTMLTextAreaElement>(null);
 
   /**
@@ -61,26 +83,22 @@ export function TextEditorOverlay({
     return () => node.removeEventListener("keydown", onKeyDown);
   }, [onCancel]);
 
-  const origin = worldToScreen(
-    { x: object.transform.x, y: object.transform.y },
-    viewport,
-  );
-  const width = Math.max(object.transform.width * viewport.zoom, 160);
-  // Font size is document data (a number in the .astrx model), not UI chrome, so
-  // it is scaled in pixels rather than pulled from a spacing token.
-  const fontSize = (object.style.text?.fontSize ?? 14) * viewport.zoom;
-  const rows = Math.max(1, Math.round((object.transform.height * viewport.zoom) / (fontSize * 1.4)));
+  const origin = worldToScreen(target.origin, viewport);
+  const width = Math.max(target.worldWidth * viewport.zoom, 160);
+  // Font size is document data (a number in the model), not UI chrome, so it is
+  // scaled in pixels rather than pulled from a spacing token.
+  const fontSize = target.worldFontSize * viewport.zoom;
 
   return (
     <TextArea
       ref={areaRef}
-      label={`Edit the label for ${object.name ?? "this object"}`}
+      label={target.ariaLabel}
       isLabelHidden
       value={draft}
       hasAutoFocus
       // An offline app should not be reaching for OS spelling dictionaries.
       hasSpellCheck={false}
-      rows={rows}
+      rows={target.rows}
       width={width}
       size="sm"
       placeholder="Label"
