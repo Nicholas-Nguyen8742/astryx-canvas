@@ -235,28 +235,60 @@ by the lockfile plus this recorded, scoped assessment.
 
 ---
 
-## 12. `polyline` is deferred to the connector milestone (FR-OBJ-01)
+## 12. `polyline` is still deferred (FR-OBJ-01)
 
 FR-OBJ-01 lists `polyline` as a MUST object type. It is **not yet implemented**,
 while the other MUST shapes (`rectangle`, `roundedRectangle`, `ellipse`,
 `circle`, `diamond`, `triangle`, `text`, `line`, `arrow`) are.
 
-The reason is interaction model, not effort. Every other shape is a single
-press-drag-release gesture. A polyline is click-per-vertex with an open
-gesture that is terminated deliberately — the same model connectors require
-(FR-CONN-01, FR-CONN-03). Building it now would mean either:
+**This entry originally deferred `polyline` to the connector milestone on the
+grounds that the two share a multi-point interaction and should be built
+together. Connectors have since been built, and that prediction was only partly
+right.** A connector gesture has fixed arity: click a source, click a target,
+done. A polyline needs N vertices, a deliberate termination (Enter, double-click
+or Escape), and live feedback for the segment currently being placed. The only
+machinery the two genuinely share is "click a shape to anchor an endpoint", and
+that now exists.
 
-- a second, throwaway multi-point interaction that gets replaced when
-  connectors land, or
-- one multi-point interaction built for polylines that connectors then have to
-  be bent around.
+The deferral therefore still stands, but on narrower grounds than originally
+stated: `polyline` needs a variable-length interaction of its own. It is real
+new work, not a reuse of the connector tool, and should not be built as a
+variant of it.
 
-Both are worse than shipping the two together. `polyline` and `path` remain
-valid `ObjectType` values in the schema (§12.1) and round-trip through
-save/load, so no format change is needed when they arrive. Until then a
-hand-authored document containing one falls through to the rectangle branch of
-`shapeGeometry`, which draws a bounding box rather than the vertices — an
-acknowledged gap, not a silent corruption.
+`polyline` and `path` remain valid `ObjectType` values in the schema (§12.1) and
+round-trip through save/load, so no format change is needed when they arrive.
+Until then a hand-authored document containing one falls through to the rectangle
+branch of `shapeGeometry`, which draws a bounding box rather than the vertices —
+an acknowledged gap, not a silent corruption.
+
+---
+
+## 13. Connector coverage is partial
+
+Connectors are implemented end to end for the core case, but not every
+`FR-CONN` behaviour is present. Recorded so the gap is not mistaken for
+completion.
+
+**Working:** creating an edge between two objects with a two-click gesture;
+straight, orthogonal and curved routing; all four arrowhead shapes at either
+end; anchoring to a named port or, failing that, to the shape's perimeter;
+fallback points for endpoints whose object is gone; independent selection;
+deleting a connector on its own; deleting a shape cascading to its edges;
+undo/redo across all of it; and identical rendering on the live canvas and in
+SVG, PNG, JPEG and PDF export.
+
+**Not implemented:**
+
+- **Ports have no UI.** The schema carries them, `resolveConnector` honours a
+  `portId`, and a port rotates with its object — but nothing creates, displays
+  or hovers one, so every edge currently attaches to the perimeter.
+- **Connector labels are ignored.** `Connector.label` round-trips through
+  save/load and is never drawn.
+- **Endpoints cannot be re-attached.** There is no dragging of an existing
+  edge's ends, and no waypoint editing for orthogonal routes.
+- **No connector styling UI.** Routing and arrowheads are reachable only through
+  the document format, not the app. `DocumentSettings.connectorDefaults` is
+  preserved on save but is not consulted when a connector is created.
 
 ---
 
@@ -267,6 +299,12 @@ correction are: §9 (stack table — StyleX plugin, Fabric, jsPDF, TypeScript),
 §9.1 (canvas engine and adapter interface), §11.1 (token API), §11.6 (font
 bundling), §15.4 (PDF strategy), §24 (project layout).
 
-FR-OBJ-01 should also note that `polyline` shares its interaction model with
-the connector requirements, so the two are sequenced together rather than
-delivered shape-by-shape.
+FR-OBJ-01 should also note that `polyline` needs a variable-length interaction
+of its own. It was originally sequenced with the connector requirements on the
+assumption that they shared a multi-point gesture; building connectors showed
+they share less than expected (see deviation 12), so `polyline` should be
+scheduled as its own item rather than as a connector variant.
+
+The connector requirements should be reviewed against deviation 13, which lists
+what is implemented and what is not — notably that ports exist in the format and
+in resolution but have no UI, so nothing currently attaches to one.
