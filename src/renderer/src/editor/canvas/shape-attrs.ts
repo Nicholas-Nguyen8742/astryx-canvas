@@ -143,14 +143,23 @@ export function shapeGeometry(
           : textStyle?.textAlign === "right"
             ? "end"
             : "middle";
+      // A label is painted with the *text* colour, never the shape fill. Falling
+      // back to `fill` here rendered labels in --color-background-surface: white
+      // text on a near-white canvas, present in the DOM and hit-testable but
+      // effectively invisible.
+      const explicitColor = textStyle?.color;
+      const textColor =
+        typeof explicitColor === "string" && explicitColor.length > 0
+          ? explicitColor
+          : target === "dom"
+            ? "var(--color-text-primary)"
+            : "#000000";
+
       return {
         element: "text",
         attrs: {
           ...shared,
-          fill:
-            resolveColor(style.text?.color as ColorValue | undefined, target) ??
-            fill ??
-            "currentColor",
+          fill: textColor,
           stroke: "none",
           x: transform.x + transform.width / 2,
           y: transform.y + transform.height / 2,
