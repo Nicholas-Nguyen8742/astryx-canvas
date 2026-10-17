@@ -62,6 +62,7 @@ const TOOLS: readonly { tool: ActiveTool; label: string }[] = [
   { tool: "text", label: "Text" },
   { tool: "line", label: "Line" },
   { tool: "arrow", label: "Arrow" },
+  { tool: "connector", label: "Connector" },
   { tool: "pan", label: "Pan" },
 ];
 

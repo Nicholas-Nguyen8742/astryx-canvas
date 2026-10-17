@@ -903,6 +903,119 @@ describe("Astryx Architecture Canvas — editing journey", () => {
     );
   });
 
+  /** Connectors live in their own id space, so they need their own locator. */
+  const connectorNodes = () => window.locator("svg [data-connector-id]");
+
+  async function connectorCount(): Promise<number> {
+    return connectorNodes().count();
+  }
+
+  /** Clicks the middle of a shape drawn by `drawShape` at (x, y). */
+  async function clickShapeCentre(x: number, y: number): Promise<void> {
+    const box = await canvasBox();
+    await window.mouse.click(box.x + x + 70, box.y + y + 45);
+  }
+
+  /** Draws two shapes and wires them, returning once the connector exists. */
+  async function wireTwoShapes(): Promise<void> {
+    await drawShape("Rectangle", 100, 120, 1);
+    await drawShape("Rectangle", 320, 120, 2);
+    await window
+      .getByRole("button", { name: "Connector", exact: true })
+      .click();
+    await clickShapeCentre(100, 120);
+    await clickShapeCentre(320, 120);
+    await waitFor(
+      async () => (await connectorCount()) === 1,
+      "the connector to be created",
+    );
+  }
+
+  it("wires a connector between two shapes with two clicks", async () => {
+    await drawShape("Rectangle", 100, 120, 1);
+    await drawShape("Rectangle", 320, 120, 2);
+    expect(await connectorCount()).toBe(0);
+
+    await wireTwoShapes();
+
+    // The path is resolved from the shapes, not stored, so it must carry real
+    // move and line commands rather than an empty or degenerate route.
+    const d = await connectorNodes()
+      .first()
+      .locator("path")
+      .last()
+      .getAttribute("d");
+    expect(d).toContain("M ");
+    expect(d).toContain("L ");
+
+    // The gesture hands control back, matching the shape tools.
+    await waitFor(
+      async () =>
+        (await window
+          .getByRole("button", { name: "Select", exact: true })
+          .getAttribute("data-variant")) === "primary",
+      "the tool to return to select",
+    );
+  });
+
+  it("removes a connector with its shape and restores both on one undo", async () => {
+    await wireTwoShapes();
+
+    await clickShapeCentre(100, 120);
+    await window.keyboard.press("Delete");
+    await waitFor(
+      async () => (await connectorCount()) === 0 && (await objectCount()) === 1,
+      "the shape and its connector to go together",
+    );
+
+    await window.keyboard.press("Control+z");
+    await waitFor(
+      async () => (await connectorCount()) === 1 && (await objectCount()) === 2,
+      "one undo to restore the shape and its connector",
+    );
+  });
+
+  it("deletes a selected connector on its own", async () => {
+    await wireTwoShapes();
+
+    // The visible path is the second of the pair; the first is the transparent
+    // hit stroke. Clicking either lands on the group carrying the id.
+    const box = await canvasBox();
+    await window.mouse.click(box.x + 280, box.y + 165);
+    await window.keyboard.press("Delete");
+
+    await waitFor(
+      async () => (await connectorCount()) === 0,
+      "the connector to be deleted",
+    );
+    // The shapes are untouched: a connector delete must not cascade upwards.
+    expect(await objectCount()).toBe(2);
+
+    await window.keyboard.press("Control+z");
+    await waitFor(
+      async () => (await connectorCount()) === 1,
+      "undo to restore the connector",
+    );
+  });
+
+  it("abandons a half-drawn connector on Escape", async () => {
+    await drawShape("Rectangle", 100, 120, 1);
+    await drawShape("Rectangle", 320, 120, 2);
+
+    await window
+      .getByRole("button", { name: "Connector", exact: true })
+      .click();
+    await clickShapeCentre(100, 120);
+    await window.keyboard.press("Escape");
+
+    // The pending source is gone, so the next click starts a fresh wire from its
+    // own shape rather than completing the abandoned one. Had Escape not cleared
+    // it, this click would produce a connector from the first shape.
+    await clickShapeCentre(320, 120);
+    await window.waitForTimeout(200);
+    expect(await connectorCount()).toBe(0);
+  });
+
   // Runs last: a failure here means one of the journeys above threw inside React.
   it("produces no renderer errors across the whole journey", () => {
     expect(pageErrors.map((error) => error.message)).toEqual([]);

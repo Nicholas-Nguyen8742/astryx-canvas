@@ -69,7 +69,14 @@ export type Interaction =
        */
       square: boolean;
     }
-  | { kind: "create"; tool: ShapeTool; startWorld: Point; currentWorld: Point };
+  | { kind: "create"; tool: ShapeTool; startWorld: Point; currentWorld: Point }
+  | {
+      kind: "connector";
+      /** The object the connector is being drawn from. */
+      sourceId: string;
+      /** Cursor position, so the rubber band tracks it between clicks. */
+      currentWorld: Point;
+    };
 
 export const SHAPE_TOOLS = [
   "rectangle",
@@ -97,6 +104,14 @@ export interface EditorState {
   activeTool: ActiveTool;
   /** Selection is stored as ids, never object references (TRD §13.2 rule 4). */
   selection: string[];
+  /**
+   * Selected connectors, kept apart from `selection`.
+   *
+   * The two id spaces are disjoint — an object id is never a connector id — but
+   * a single merged list would still make Delete ambiguous, since the command it
+   * routes to differs. Holding both at once is not a state the UI can express.
+   */
+  connectorSelection: string[];
   hoveredId: string | null;
   viewport: Viewport;
   /** Size of the canvas element in CSS pixels, as {x: width, y: height}. */
@@ -121,6 +136,8 @@ export interface EditorState {
 
   setTool(tool: ActiveTool): void;
   setSelection(ids: readonly string[]): void;
+  /** Selects connectors and clears the object selection; the two are exclusive. */
+  setConnectorSelection(ids: readonly string[]): void;
   toggleInSelection(id: string): void;
   clearSelection(): void;
   setHovered(id: string | null): void;
@@ -142,6 +159,7 @@ export function createEditorStore() {
   return create<EditorState>()((set, get) => ({
     activeTool: "select",
     selection: [],
+    connectorSelection: [],
     hoveredId: null,
     viewport: { x: 0, y: 0, zoom: 1 },
     viewportSize: { x: 0, y: 0 },
@@ -177,7 +195,14 @@ export function createEditorStore() {
 
     setSelection(ids) {
       const unique = Array.from(new Set(ids));
-      set({ selection: unique });
+      // Objects and connectors are selected exclusively, so picking one kind
+      // drops the other rather than leaving a Delete keypress ambiguous.
+      set({ selection: unique, connectorSelection: [] });
+    },
+
+    setConnectorSelection(ids) {
+      const unique = Array.from(new Set(ids));
+      set({ selection: [], connectorSelection: unique });
     },
 
     toggleInSelection(id) {
@@ -186,11 +211,12 @@ export function createEditorStore() {
         selection: selection.includes(id)
           ? selection.filter((existing) => existing !== id)
           : [...selection, id],
+        connectorSelection: [],
       });
     },
 
     clearSelection() {
-      set({ selection: [], interaction: null });
+      set({ selection: [], connectorSelection: [], interaction: null });
     },
 
     setHovered(id) {

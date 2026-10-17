@@ -25,13 +25,17 @@ import {
   worldToScreen,
 } from "../geometry";
 import {
+  createConnector,
   createObject,
   normaliseDragTransform,
+  previewConnector,
   previewObject,
   type ShapeTool,
 } from "../factories";
 import {
+  CreateConnectorsCommand,
   CreateObjectsCommand,
+  DeleteConnectorsCommand,
   DeleteObjectsCommand,
   MoveObjectsCommand,
   ReorderObjectsCommand,
@@ -54,7 +58,12 @@ import {
   connectorAttrs,
   shapeGeometry,
 } from "./shape-attrs";
-import { resolveConnectors, type ResolvedConnector } from "../connectors";
+import {
+  indexObjects,
+  resolveConnector,
+  resolveConnectors,
+  type ResolvedConnector,
+} from "../connectors";
 import { TextEditorOverlay } from "./TextEditorOverlay";
 
 /** Handle edge length in screen pixels, so handles stay grabbable at any zoom. */
@@ -253,6 +262,37 @@ function ArrowMarkerDefs() {
 }
 
 /**
+ * The rubber band shown while wiring a connector.
+ *
+ * Resolved through the same `resolveConnector` a committed connector uses, so
+ * the source end clips to the shape's perimeter identically. A bespoke line from
+ * the shape's centre would preview something other than what the second click
+ * actually produces.
+ */
+function ConnectorPreview({
+  sourceId,
+  cursor,
+  index,
+}: {
+  sourceId: string;
+  cursor: Point;
+  index: ReadonlyMap<string, DiagramObject>;
+}) {
+  const connector = previewConnector(sourceId, cursor);
+  const resolved = resolveConnector(connector, index);
+  // Null when the source object has vanished mid-gesture; drawing to the origin
+  // would be worse than drawing nothing.
+  if (!resolved) return null;
+  return (
+    <path
+      {...connectorAttrs(connector, resolved, "dom")}
+      pointerEvents="none"
+      vectorEffect="non-scaling-stroke"
+    />
+  );
+}
+
+/**
  * The in-progress shape while dragging out a new object (TRD §14.5).
  *
  * A thin wrapper: the preview is a real `DiagramObject` with a reserved id that
@@ -298,6 +338,7 @@ export function SvgCanvas() {
     () => resolveConnectors(connectors, objects),
     [connectors, objects],
   );
+  const objectIndex = useMemo(() => indexObjects(objects), [objects]);
   const viewport = useEditorStore((state) => state.viewport);
   const selection = useEditorStore((state) => state.selection);
   const activeTool = useEditorStore((state) => state.activeTool);
@@ -359,8 +400,22 @@ export function SvgCanvas() {
       const doc = useDocumentStore.getState();
       const hist = useHistoryStore.getState();
 
+      // Escape abandons a half-drawn connector. Without it the only way out of
+      // wiring mode is to click empty canvas, which nobody discovers by accident.
+      if (event.key === "Escape") {
+        const editor = useEditorStore.getState();
+        if (editor.interaction?.kind === "connector") {
+          editor.setInteraction(null);
+          event.preventDefault();
+        }
+        return;
+      }
+
       // Select all (§14.4). Deliberately ahead of the empty-selection guard,
       // since this is the shortcut you reach for when nothing is selected yet.
+      // Connectors are not selected here: object and connector selection are
+      // exclusive, and deleting every object already cascades to every connector
+      // attached to them, so Ctrl+A then Delete still clears the whole page.
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
         event.preventDefault();
         const page = doc.document.pages.find((p) => p.id === doc.activePageId);
@@ -436,6 +491,20 @@ export function SvgCanvas() {
         }
       }
 
+      // Ahead of the empty-object-selection guard, because a connector selection
+      // is a complete selection in its own right and would otherwise fall
+      // through and do nothing at all.
+      const connectorSelection = useEditorStore.getState().connectorSelection;
+      if (
+        connectorSelection.length > 0 &&
+        (event.key === "Delete" || event.key === "Backspace")
+      ) {
+        event.preventDefault();
+        hist.execute(new DeleteConnectorsCommand(doc, connectorSelection));
+        useEditorStore.getState().setConnectorSelection([]);
+        return;
+      }
+
       const currentSelection = useEditorStore.getState().selection;
       if (currentSelection.length === 0) return;
 
@@ -487,6 +556,14 @@ export function SvgCanvas() {
     const target = event.target as Element;
     const handle = target.getAttribute("data-handle") as ResizeHandle | null;
     const objectId = target.getAttribute("data-object-id");
+    // A connector renders as a group wrapping two paths, so the hit target is
+    // normally the path and the id has to be found by walking up.
+    const connectorId =
+      target.getAttribute("data-connector-id") ??
+      target
+        .closest("[data-connector-id]")
+        ?.getAttribute("data-connector-id") ??
+      null;
 
     const startPan = () => {
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -510,6 +587,50 @@ export function SvgCanvas() {
       return;
     }
 
+    if (store.activeTool === "connector") {
+      // Two clicks rather than a drag: the first picks the source shape, the
+      // second the target. Deliberately no pointer capture — capture retargets
+      // compatibility mouse events to the capturing element, which would leave
+      // the second click landing on the <svg> instead of the shape under it.
+      const pending =
+        store.interaction?.kind === "connector" ? store.interaction : null;
+
+      if (!objectId) {
+        // Empty canvas abandons the pending wire. Leaving the rubber band up
+        // would make the user hunt for Escape to exit a mode they believe they
+        // already left by clicking away.
+        if (pending) store.setInteraction(null);
+        return;
+      }
+
+      if (!pending) {
+        store.setInteraction({
+          kind: "connector",
+          sourceId: objectId,
+          currentWorld: world,
+        });
+        return;
+      }
+
+      // Clicking the source again is a mis-click, not a request for a self-loop.
+      if (pending.sourceId === objectId) return;
+
+      const connector = createConnector(
+        { objectId: pending.sourceId },
+        { objectId },
+      );
+      useHistoryStore
+        .getState()
+        .execute(
+          new CreateConnectorsCommand(useDocumentStore.getState(), [connector]),
+        );
+      store.setInteraction(null);
+      store.setSelection([objectId]);
+      // Matches the shape tools: a finished gesture hands control back.
+      store.setTool("select");
+      return;
+    }
+
     if (handle && store.selection.length === 1) {
       const single = store.selection[0];
       const found = objects.find((object) => object.id === single);
@@ -527,6 +648,24 @@ export function SvgCanvas() {
         });
         return;
       }
+    }
+
+    if (connectorId) {
+      const already = store.connectorSelection.includes(connectorId);
+      store.setConnectorSelection(
+        event.shiftKey
+          ? already
+            ? store.connectorSelection.filter((id) => id !== connectorId)
+            : [...store.connectorSelection, connectorId]
+          : // A plain click on an already-selected connector keeps it selected so
+            // the gesture can turn into something else; otherwise it replaces.
+            already && store.connectorSelection.length === 1
+            ? store.connectorSelection
+            : [connectorId],
+      );
+      // No move interaction: connectors have no transform of their own to drag,
+      // their geometry follows the objects they are attached to.
+      return;
     }
 
     if (objectId) {
@@ -585,6 +724,9 @@ export function SvgCanvas() {
 
       case "marquee":
       case "create":
+      // The connector rubber band tracks the cursor between the two clicks, so
+      // it is the same shape of update as a marquee or a drag-out preview.
+      case "connector":
         store.setInteraction({ ...current, currentWorld: world });
         break;
 
@@ -625,7 +767,12 @@ export function SvgCanvas() {
 
     const doc = useDocumentStore.getState();
     const hist = useHistoryStore.getState();
-    store.setInteraction(null);
+    // Every other gesture is one press-drag-release, so pointer-up ends it. A
+    // connector spans two separate clicks, and clearing here would discard the
+    // pending source the moment the first click was released — the second click
+    // would then start a fresh wire instead of completing one, so no connector
+    // could ever be created. Its lifecycle is owned by pointer-down and Escape.
+    if (current.kind !== "connector") store.setInteraction(null);
 
     switch (current.kind) {
       case "pan":
@@ -750,7 +897,7 @@ export function SvgCanvas() {
   const cursor =
     isSpaceDown || activeTool === "pan"
       ? "grab"
-      : isShapeTool(activeTool)
+      : isShapeTool(activeTool) || activeTool === "connector"
         ? "crosshair"
         : "default";
 
@@ -893,6 +1040,14 @@ export function SvgCanvas() {
                 interaction.currentWorld,
                 interaction.tool,
               )}
+            />
+          ) : null}
+
+          {interaction?.kind === "connector" ? (
+            <ConnectorPreview
+              sourceId={interaction.sourceId}
+              cursor={interaction.currentWorld}
+              index={objectIndex}
             />
           ) : null}
 

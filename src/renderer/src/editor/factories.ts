@@ -6,6 +6,7 @@ import type {
   DiagramObject,
   DiagramStyle,
   ObjectType,
+  Point,
   TextContent,
   Transform,
 } from "../document/model";
@@ -204,6 +205,45 @@ export function createConnector(
     zIndex: 0,
     visible: true,
     locked: false,
+  };
+}
+
+/** Stable id for the connector rubber band, which is never inserted. */
+export const PREVIEW_CONNECTOR_ID = "__connector_preview__";
+
+/**
+ * The rubber band drawn while a connector is being wired up.
+ *
+ * Deliberately a real `Connector` rather than a bespoke line, and resolved
+ * through `resolveConnector` with the cursor as the target's fallback point. The
+ * source end therefore clips to the shape's perimeter exactly as the finished
+ * connector will. A straight line from the shape's centre would show the user
+ * something other than what they are about to get, which is the one thing a
+ * preview must not do.
+ *
+ * Styling is explicit rather than borrowed from the `.canvas-preview` rule: that
+ * rule targets the shape element itself, where a CSS declaration beats an SVG
+ * presentation attribute, but a connector is drawn as a `<path>` inside a group
+ * and would keep its own attribute over anything inherited.
+ */
+export function previewConnector(sourceId: string, cursor: Point): Connector {
+  return {
+    id: PREVIEW_CONNECTOR_ID,
+    source: { objectId: sourceId },
+    // An empty objectId never resolves, so `resolveConnector` falls through to
+    // the fallback point — which is exactly the "free end at the cursor" case.
+    target: { objectId: "", fallbackPoint: cursor },
+    routing: "straight",
+    style: {
+      stroke: DEFAULT_CONNECTOR_STROKE,
+      strokeWidth: 2,
+      opacity: 0.7,
+      dashArray: [6, 4],
+      endArrow: "triangle",
+    },
+    zIndex: 0,
+    visible: true,
+    locked: true,
   };
 }
 
