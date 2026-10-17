@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -114,6 +114,17 @@ async function drawRectangle(
 async function statusText(): Promise<string> {
   const text = await window.locator(".astryx-layout-footer").innerText();
   return text.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The transient result message lives in the content region, not the footer —
+ * the footer only carries the persistent readouts (file, counts, zoom).
+ */
+async function statusMessage(): Promise<string> {
+  const node = window.locator(".status-message");
+  return (await node.count()) > 0
+    ? (await node.first().innerText()).trim()
+    : "";
 }
 
 async function resetCanvas(): Promise<void> {
@@ -404,6 +415,100 @@ describe("Astryx Architecture Canvas — editing journey", () => {
     expect(
       await window.locator("svg defs marker#astryx-arrowhead").count(),
     ).toBe(1);
+  });
+
+  /**
+   * Playwright cannot drive a native OS save dialog, and leaving one open would
+   * hang the suite. Substituting a fixed path lets the whole export chain run for
+   * real: renderer serialisation, IPC transfer, and the main-process atomic
+   * write. Only the OS modal itself is replaced.
+   */
+  async function stubSaveDialog(filePath: string): Promise<void> {
+    await app.evaluate(({ dialog }, target) => {
+      const bridge = dialog as unknown as {
+        showSaveDialog: (...args: unknown[]) => Promise<unknown>;
+      };
+      bridge.showSaveDialog = async () => ({
+        canceled: false,
+        filePath: target,
+      });
+    }, filePath);
+  }
+
+  it("exports SVG to disk through the main process", async () => {
+    await drawRectangle();
+    const target = join(profileDir, "e2e-export.svg");
+    await stubSaveDialog(target);
+
+    await window.getByRole("button", { name: "Export SVG" }).click();
+    await waitFor(() => existsSync(target), "the SVG export to reach the disk");
+
+    const contents = readFileSync(target, "utf8");
+    expect(contents.startsWith("<svg ")).toBe(true);
+    expect(contents).toContain('xmlns="http://www.w3.org/2000/svg"');
+    // Standalone means no dependence on the app's own stylesheet (FR-EXP-12).
+    expect(contents).not.toContain("var(--");
+    await waitFor(
+      async () => (await statusMessage()).includes("Exported SVG"),
+      "the status message to confirm the export",
+    );
+  });
+
+  it("exports a vector PDF through Chromium print", async () => {
+    await drawRectangle();
+    const target = join(profileDir, "e2e-export.pdf");
+    await stubSaveDialog(target);
+
+    await window.getByRole("button", { name: "Export PDF" }).click();
+    // Printing spins up a hidden window, so this gets a longer leash.
+    await waitFor(
+      () => existsSync(target),
+      "the PDF export to reach the disk",
+      30_000,
+    );
+
+    const bytes = readFileSync(target);
+    expect(bytes.subarray(0, 5).toString("latin1")).toBe("%PDF-");
+    expect(bytes.byteLength).toBeGreaterThan(1000);
+  });
+
+  // FR-EXP-03/04, checked the way TRD §22.3 prescribes: magic bytes, then size.
+  // These two are the only coverage the raster path has — it needs a real DOM for
+  // Image and a 2D canvas, so it cannot run in the node unit environment.
+  it("exports a PNG raster to disk", async () => {
+    await drawRectangle();
+    const target = join(profileDir, "e2e-export.png");
+    await stubSaveDialog(target);
+
+    await window.getByRole("button", { name: "Export PNG" }).click();
+    await waitFor(
+      () => existsSync(target),
+      "the PNG export to reach the disk",
+      30_000,
+    );
+
+    const bytes = readFileSync(target);
+    expect(Array.from(bytes.subarray(0, 8))).toEqual([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ]);
+    expect(bytes.byteLength).toBeGreaterThan(100);
+  });
+
+  it("exports a JPEG raster to disk", async () => {
+    await drawRectangle();
+    const target = join(profileDir, "e2e-export.jpg");
+    await stubSaveDialog(target);
+
+    await window.getByRole("button", { name: "Export JPEG" }).click();
+    await waitFor(
+      () => existsSync(target),
+      "the JPEG export to reach the disk",
+      30_000,
+    );
+
+    const bytes = readFileSync(target);
+    expect(Array.from(bytes.subarray(0, 3))).toEqual([0xff, 0xd8, 0xff]);
+    expect(bytes.byteLength).toBeGreaterThan(100);
   });
 
   // Runs last: a failure here means one of the journeys above threw inside React.
