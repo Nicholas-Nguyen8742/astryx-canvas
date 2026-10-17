@@ -14,6 +14,17 @@ import { createMainWindow } from "./window";
  */
 app.setName("Astryx Architecture Canvas");
 
+/**
+ * Automation affordance: lets an E2E run point the app at a throwaway profile so
+ * its autosave, logs and recent files never touch real user data — and so a
+ * previous run's autosave cannot surface the recovery dialog into the next one.
+ * Must run before the first `getPath('userData')` call below.
+ */
+const userDataOverride = process.env.ASTRYX_USER_DATA;
+if (userDataOverride && userDataOverride.length > 0) {
+  app.setPath("userData", userDataOverride);
+}
+
 const isDev = !app.isPackaged;
 const logLevel = isDev ? "debug" : "info";
 
@@ -73,17 +84,21 @@ app.on("activate", () => {
   }
 });
 
+// Set once we have taken over shutting down, so the second before-quit that our
+// own app.quit() triggers is allowed through instead of being blocked again.
+let isFlushingBeforeQuit = false;
+
 app.on("before-quit", (event) => {
-  // Flush the log queue so the shutdown record actually reaches disk.
-  const pending = Promise.all([logger.flush(), rendererLogger.flush()]);
-  let settled = false;
-  pending.then(() => {
-    settled = true;
-  });
-  if (!settled) {
-    event.preventDefault();
-    void pending.finally(() => app.quit());
-  }
+  if (isFlushingBeforeQuit) return;
+  isFlushingBeforeQuit = true;
+
+  // Block this quit, flush the log queue so the shutdown record reaches disk,
+  // then quit again. Without the guard above this loops forever, because
+  // `pending` can never have settled by the time the synchronous check runs.
+  event.preventDefault();
+  void Promise.all([logger.flush(), rendererLogger.flush()]).finally(() =>
+    app.quit(),
+  );
 });
 
 // A document editor should reuse one process; a second launch focuses the first.
