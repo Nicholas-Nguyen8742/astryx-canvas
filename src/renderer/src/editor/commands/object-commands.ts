@@ -317,3 +317,39 @@ export class DeleteConnectorsCommand implements EditorCommand {
     this.mutator.restoreConnectors(this.extracted);
   }
 }
+
+/**
+ * Inline connector label edits.
+ *
+ * Coalesces for the same reason `UpdateContentCommand` does: without `merge`,
+ * typing a twelve-character label pushes twelve undo entries and burns through
+ * the history cap inside a single field (FR-HIST-04). With it, one edit session
+ * is one undo step back to whatever the label was before typing began.
+ */
+export class UpdateConnectorLabelCommand implements EditorCommand {
+  readonly id = nextCommandId("connector-label");
+  readonly label = "Edit connector label";
+  readonly timestamp = new Date().toISOString();
+
+  constructor(
+    private readonly mutator: DocumentMutator,
+    private readonly ids: readonly string[],
+    private readonly from: Readonly<Record<string, TextContent | undefined>>,
+    private to: Readonly<Record<string, TextContent | undefined>>,
+  ) {}
+
+  execute(): void {
+    this.mutator.setConnectorLabels(this.to);
+  }
+
+  undo(): void {
+    this.mutator.setConnectorLabels(this.from);
+  }
+
+  merge(previous: EditorCommand): boolean {
+    if (!(previous instanceof UpdateConnectorLabelCommand)) return false;
+    if (!sameIdSet(previous.ids, this.ids)) return false;
+    previous.to = this.to;
+    return true;
+  }
+}

@@ -310,6 +310,27 @@ export function createDocumentStore(
           )
           .map((connector) => connector.id);
       },
+
+      setConnectorLabels(entries) {
+        mutateConnectors((list) =>
+          list.map((connector) =>
+            // Key presence, not truthiness: an explicit `undefined` removes a
+            // label, which is a different operation from leaving it alone.
+            connector.id in entries
+              ? { ...connector, label: entries[connector.id] }
+              : connector,
+          ),
+        );
+      },
+
+      getConnectorLabels(ids) {
+        const wanted = new Set(ids);
+        const result: Record<string, TextContent | undefined> = {};
+        for (const connector of activeConnectors()) {
+          if (wanted.has(connector.id)) result[connector.id] = connector.label;
+        }
+        return result;
+      },
     };
   });
 }

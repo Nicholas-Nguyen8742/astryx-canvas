@@ -73,6 +73,17 @@ export interface DocumentMutator {
    * edits and reappears if the shape is ever restored by hand.
    */
   connectorsTouching(objectIds: readonly string[]): string[];
+  /**
+   * As `setContents`, for connector labels. `undefined` as a value removes the
+   * label rather than storing an empty one, so a cleared label does not leave a
+   * `TextContent` shell behind in the saved document.
+   */
+  setConnectorLabels(
+    entries: Readonly<Record<string, TextContent | undefined>>,
+  ): void;
+  getConnectorLabels(
+    ids: readonly string[],
+  ): Record<string, TextContent | undefined>;
 }
 
 /**

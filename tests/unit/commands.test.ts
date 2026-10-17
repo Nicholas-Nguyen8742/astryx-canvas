@@ -7,6 +7,7 @@ import {
   DeleteObjectsCommand,
   MoveObjectsCommand,
   ResizeObjectCommand,
+  UpdateConnectorLabelCommand,
   UpdateContentCommand,
   UpdateStyleCommand,
 } from "../../src/renderer/src/editor/commands/object-commands";
@@ -689,6 +690,137 @@ describe("connectors", () => {
       history.getState().undo();
       expect(connectorIds(store)).toEqual(["conn1", "conn2", "conn3"]);
       expect(store.getState().getObjectOrder()).toEqual(["a", "b", "c"]);
+    });
+  });
+
+  describe("labels", () => {
+    function labelOf(
+      store: ReturnType<typeof createDocumentStore>,
+      id: string,
+    ): string | undefined {
+      return store.getState().getConnectorLabels([id])[id]?.value;
+    }
+
+    it("sets a label and leaves the others untouched", () => {
+      const store = wiredStore();
+      store.getState().setConnectorLabels({ conn1: { value: "HTTPS" } });
+
+      expect(labelOf(store, "conn1")).toBe("HTTPS");
+      expect(
+        store.getState().getConnectorLabels(["conn2"]).conn2,
+      ).toBeUndefined();
+    });
+
+    it("removes a label when the entry is explicitly undefined", () => {
+      const store = wiredStore();
+      store.getState().setConnectorLabels({ conn1: { value: "HTTPS" } });
+      // Key presence, not truthiness: an empty-string label would otherwise be
+      // indistinguishable from "leave this one alone".
+      store.getState().setConnectorLabels({ conn1: undefined });
+
+      expect(
+        store.getState().getConnectorLabels(["conn1"]).conn1,
+      ).toBeUndefined();
+    });
+
+    it("edits a label through the command and undoes it", () => {
+      const store = wiredStore();
+      const from = store.getState().getConnectorLabels(["conn1"]);
+      const command = new UpdateConnectorLabelCommand(
+        store.getState(),
+        ["conn1"],
+        from,
+        { conn1: { value: "HTTPS" } },
+      );
+
+      expect(command.label).toBe("Edit connector label");
+      command.execute();
+      expect(labelOf(store, "conn1")).toBe("HTTPS");
+
+      command.undo();
+      expect(
+        store.getState().getConnectorLabels(["conn1"]).conn1,
+      ).toBeUndefined();
+    });
+
+    it("coalesces typing into a single undo step", () => {
+      const store = wiredStore();
+      const history = createHistoryStore();
+      // Captured once, before typing: that is what makes one undo return to the
+      // original label rather than one keystroke back.
+      const from = store.getState().getConnectorLabels(["conn1"]);
+
+      for (const value of ["H", "HT", "HTT", "HTTP", "HTTPS"]) {
+        history.getState().execute(
+          new UpdateConnectorLabelCommand(store.getState(), ["conn1"], from, {
+            conn1: { value },
+          }),
+        );
+      }
+
+      expect(history.getState().past).toHaveLength(1);
+      expect(labelOf(store, "conn1")).toBe("HTTPS");
+
+      history.getState().undo();
+      expect(
+        store.getState().getConnectorLabels(["conn1"]).conn1,
+      ).toBeUndefined();
+    });
+
+    it("does not coalesce edits to two different connectors", () => {
+      const store = wiredStore();
+      const history = createHistoryStore();
+
+      // Each command snapshots its own target's prior label, exactly as the
+      // canvas commit handler does. Passing an empty object instead would make
+      // undo a silent no-op, because setConnectorLabels keys off presence rather
+      // than truthiness and an absent key means "leave this one alone".
+      history.getState().execute(
+        new UpdateConnectorLabelCommand(
+          store.getState(),
+          ["conn1"],
+          store.getState().getConnectorLabels(["conn1"]),
+          {
+            conn1: { value: "HTTPS" },
+          },
+        ),
+      );
+      history.getState().execute(
+        new UpdateConnectorLabelCommand(
+          store.getState(),
+          ["conn2"],
+          store.getState().getConnectorLabels(["conn2"]),
+          {
+            conn2: { value: "gRPC" },
+          },
+        ),
+      );
+
+      expect(history.getState().past).toHaveLength(2);
+      expect(labelOf(store, "conn1")).toBe("HTTPS");
+      expect(labelOf(store, "conn2")).toBe("gRPC");
+
+      // Each edit undoes on its own, and neither disturbs the other's label.
+      history.getState().undo();
+      expect(labelOf(store, "conn1")).toBe("HTTPS");
+      expect(labelOf(store, "conn2")).toBeUndefined();
+    });
+
+    it("does not coalesce into an unrelated command", () => {
+      const store = wiredStore();
+      const history = createHistoryStore();
+      const from = store.getState().getConnectorLabels(["conn1"]);
+
+      history.getState().execute(
+        new UpdateConnectorLabelCommand(store.getState(), ["conn1"], from, {
+          conn1: { value: "HTTPS" },
+        }),
+      );
+      history
+        .getState()
+        .execute(new DeleteConnectorsCommand(store.getState(), ["conn2"]));
+
+      expect(history.getState().past).toHaveLength(2);
     });
   });
 });
