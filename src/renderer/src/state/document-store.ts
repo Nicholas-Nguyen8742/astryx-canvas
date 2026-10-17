@@ -13,6 +13,7 @@ import type {
 } from "../document/model";
 import { createEmptyDocument } from "../document/empty-document";
 import type {
+  ConnectorEndpoints,
   DocumentMutator,
   ExtractedConnector,
   ExtractedObject,
@@ -328,6 +329,36 @@ export function createDocumentStore(
         const result: Record<string, TextContent | undefined> = {};
         for (const connector of activeConnectors()) {
           if (wanted.has(connector.id)) result[connector.id] = connector.label;
+        }
+        return result;
+      },
+
+      setConnectorEndpoints(entries) {
+        mutateConnectors((list) =>
+          list.map((connector) => {
+            const patch = entries[connector.id];
+            if (!patch) return connector;
+            return {
+              ...connector,
+              // Presence, not truthiness, so an entry naming only one end cannot
+              // clear the other.
+              ...("source" in patch ? { source: patch.source! } : {}),
+              ...("target" in patch ? { target: patch.target! } : {}),
+            };
+          }),
+        );
+      },
+
+      getConnectorEndpoints(ids) {
+        const wanted = new Set(ids);
+        const result: Record<string, ConnectorEndpoints> = {};
+        for (const connector of activeConnectors()) {
+          if (wanted.has(connector.id)) {
+            result[connector.id] = {
+              source: connector.source,
+              target: connector.target,
+            };
+          }
         }
         return result;
       },

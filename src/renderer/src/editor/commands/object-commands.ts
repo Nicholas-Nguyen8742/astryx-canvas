@@ -6,6 +6,7 @@ import type {
   Transform,
 } from "../../document/model";
 import type {
+  ConnectorEndpoints,
   DocumentMutator,
   EditorCommand,
   ExtractedConnector,
@@ -351,5 +352,37 @@ export class UpdateConnectorLabelCommand implements EditorCommand {
     if (!sameIdSet(previous.ids, this.ids)) return false;
     previous.to = this.to;
     return true;
+  }
+}
+
+/**
+ * Re-attaching one end of an existing connector.
+ *
+ * Captures both ends rather than only the dragged one, so undo restores the whole
+ * pair even though a rewire only ever names one. The pair is small and reading it
+ * costs nothing, and it removes any question about what the other end was doing.
+ *
+ * Deliberately does not coalesce. Each rewire is a discrete drag-and-drop that a
+ * user may want to step back through individually; unlike arrow-key nudging there
+ * is no repeated gesture that would otherwise flood the history.
+ */
+export class RewireConnectorCommand implements EditorCommand {
+  readonly id = nextCommandId("rewire");
+  readonly label = "Reconnect";
+  readonly timestamp = new Date().toISOString();
+
+  constructor(
+    private readonly mutator: DocumentMutator,
+    private readonly connectorId: string,
+    private readonly from: ConnectorEndpoints,
+    private readonly to: ConnectorEndpoints,
+  ) {}
+
+  execute(): void {
+    this.mutator.setConnectorEndpoints({ [this.connectorId]: this.to });
+  }
+
+  undo(): void {
+    this.mutator.setConnectorEndpoints({ [this.connectorId]: this.from });
   }
 }

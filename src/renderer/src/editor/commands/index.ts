@@ -1,5 +1,6 @@
 import type {
   Connector,
+  ConnectorEndpoint,
   DiagramObject,
   DiagramStyle,
   TextContent,
@@ -19,6 +20,18 @@ export interface ExtractedObject {
 export interface ExtractedConnector {
   connector: Connector;
   index: number;
+}
+
+/**
+ * The ends of a connector to replace.
+ *
+ * Absent keys are left alone, so rewiring one end cannot disturb the other.
+ * Presence-keyed for the same reason `setContents` is: it makes "replace this
+ * end" and "say nothing about this end" distinguishable.
+ */
+export interface ConnectorEndpoints {
+  source?: ConnectorEndpoint;
+  target?: ConnectorEndpoint;
 }
 
 /**
@@ -84,6 +97,19 @@ export interface DocumentMutator {
   getConnectorLabels(
     ids: readonly string[],
   ): Record<string, TextContent | undefined>;
+  /**
+   * Replaces whichever ends each entry names, leaving the others alone.
+   *
+   * This is what makes a mis-wired edge fixable in place instead of having to be
+   * deleted and drawn again — and, unlike a delete, it keeps the connector's id,
+   * so anything else in the document referring to it stays valid.
+   */
+  setConnectorEndpoints(
+    entries: Readonly<Record<string, ConnectorEndpoints>>,
+  ): void;
+  getConnectorEndpoints(
+    ids: readonly string[],
+  ): Record<string, ConnectorEndpoints>;
 }
 
 /**

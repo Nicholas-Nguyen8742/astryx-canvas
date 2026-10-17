@@ -7,6 +7,7 @@ import {
   DeleteObjectsCommand,
   MoveObjectsCommand,
   ResizeObjectCommand,
+  RewireConnectorCommand,
   UpdateConnectorLabelCommand,
   UpdateContentCommand,
   UpdateStyleCommand,
@@ -821,6 +822,128 @@ describe("connectors", () => {
         .execute(new DeleteConnectorsCommand(store.getState(), ["conn2"]));
 
       expect(history.getState().past).toHaveLength(2);
+    });
+  });
+
+  describe("re-attaching endpoints", () => {
+    function endpointsOf(
+      store: ReturnType<typeof createDocumentStore>,
+      id: string,
+    ) {
+      return store.getState().getConnectorEndpoints([id])[id];
+    }
+
+    it("reads back both ends of a connector", () => {
+      const store = wiredStore();
+      expect(endpointsOf(store, "conn1")).toEqual({
+        source: { objectId: "a" },
+        target: { objectId: "b" },
+      });
+    });
+
+    it("replaces one end and leaves the other alone", () => {
+      const store = wiredStore();
+      store
+        .getState()
+        .setConnectorEndpoints({ conn1: { target: { objectId: "c" } } });
+
+      expect(endpointsOf(store, "conn1")).toEqual({
+        source: { objectId: "a" },
+        target: { objectId: "c" },
+      });
+    });
+
+    it("leaves connectors the entry does not name untouched", () => {
+      const store = wiredStore();
+      store
+        .getState()
+        .setConnectorEndpoints({ conn1: { source: { objectId: "c" } } });
+
+      expect(endpointsOf(store, "conn2")).toEqual({
+        source: { objectId: "b" },
+        target: { objectId: "c" },
+      });
+    });
+
+    it("keeps the connector's id and label through a rewire", () => {
+      // The whole reason to rewire rather than delete and redraw: anything
+      // referring to this connector, including its own label, stays valid.
+      const store = wiredStore();
+      store.getState().setConnectorLabels({ conn1: { value: "HTTPS" } });
+      store.getState().setConnectorEndpoints({
+        conn1: { target: { objectId: "c", portId: "n" } },
+      });
+
+      expect(connectorIds(store)).toContain("conn1");
+      expect(store.getState().getConnectorLabels(["conn1"]).conn1?.value).toBe(
+        "HTTPS",
+      );
+      expect(endpointsOf(store, "conn1")?.target).toEqual({
+        objectId: "c",
+        portId: "n",
+      });
+    });
+
+    it("can move an end onto a specific port", () => {
+      const store = wiredStore();
+      store.getState().setConnectorEndpoints({
+        conn1: { source: { objectId: "a", portId: "n" } },
+      });
+      expect(endpointsOf(store, "conn1")?.source).toEqual({
+        objectId: "a",
+        portId: "n",
+      });
+    });
+
+    it("rewires through the command and undoes to the original pair", () => {
+      const store = wiredStore();
+      const from = endpointsOf(store, "conn1")!;
+      const command = new RewireConnectorCommand(
+        store.getState(),
+        "conn1",
+        from,
+        { target: { objectId: "c" } },
+      );
+
+      expect(command.label).toBe("Reconnect");
+      command.execute();
+      expect(endpointsOf(store, "conn1")?.target).toEqual({ objectId: "c" });
+
+      command.undo();
+      expect(endpointsOf(store, "conn1")).toEqual(from);
+    });
+
+    it("does not coalesce, so two rewires are two undo steps", () => {
+      const store = wiredStore();
+      const history = createHistoryStore();
+
+      history
+        .getState()
+        .execute(
+          new RewireConnectorCommand(
+            store.getState(),
+            "conn1",
+            endpointsOf(store, "conn1")!,
+            { target: { objectId: "c" } },
+          ),
+        );
+      history
+        .getState()
+        .execute(
+          new RewireConnectorCommand(
+            store.getState(),
+            "conn1",
+            endpointsOf(store, "conn1")!,
+            { target: { objectId: "b" } },
+          ),
+        );
+
+      expect(history.getState().past).toHaveLength(2);
+
+      history.getState().undo();
+      expect(endpointsOf(store, "conn1")?.target).toEqual({ objectId: "c" });
+      history.getState().undo();
+      expect(endpointsOf(store, "conn1")?.target).toEqual({ objectId: "b" });
     });
   });
 });
