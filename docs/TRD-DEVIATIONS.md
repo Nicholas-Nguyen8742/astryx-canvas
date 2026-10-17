@@ -279,8 +279,9 @@ editable inline by double-click; independent selection, shown by a draggable
 handle on each end; **re-attaching either end by dragging it** onto another
 shape or port, which cancels rather than detaching when dropped on empty
 canvas; deleting a connector on its own; deleting a shape cascading to its
-edges; undo/redo across all of it; and identical rendering on the live canvas
-and in SVG, PNG, JPEG and PDF export.
+edges; **routing and both arrowheads editable from the inspector** for a single
+selected connector; undo/redo across all of it; and identical rendering on the
+live canvas and in SVG, PNG, JPEG and PDF export.
 
 **Not implemented:**
 
@@ -288,10 +289,16 @@ and in SVG, PNG, JPEG and PDF export.
   midpoint of its dominant axis. There is no way to add a bend or drag the
   existing one, so a route that crosses a shape cannot be steered around it.
   Re-attaching an end is implemented; steering the middle of the path is not.
-- **No connector styling UI.** Routing and arrowheads are reachable only through
-  the document format, not the app. `DocumentSettings.connectorDefaults` is
-  preserved on save but is not consulted when a connector is created, so a
-  document that customises it has no effect on new edges.
+- **Connector styling is only partly reachable.** Routing and both arrowheads
+  can be edited from the inspector. Colour, stroke width, dash pattern and
+  opacity cannot; doing those well needs a colour picker bound to the theme
+  tokens rather than a raw hex field, which is its own decision rather than
+  something to bolt onto this panel. The inspector also edits exactly one
+  connector at a time — with several selected there is no single value a dropdown
+  can show, and a "mixed" state is not implemented.
+  `DocumentSettings.connectorDefaults` is still preserved on save but not
+  consulted when a connector is created, so a document that customises it has no
+  effect on new edges.
 - **Custom ports cannot be authored.** The four cardinal ports are derived, and
   a shape that stores its own ports will use them, but nothing in the UI adds,
   moves or removes one.
