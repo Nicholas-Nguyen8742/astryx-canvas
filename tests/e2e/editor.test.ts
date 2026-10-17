@@ -753,6 +753,58 @@ describe("Astryx Architecture Canvas — editing journey", () => {
     expect(ry).toBeCloseTo(70, 0);
   });
 
+  it("keeps a circle round when resized from a corner handle", async () => {
+    await drawShape("Circle", 100, 120, 1);
+
+    const circle = window.locator("svg ellipse[data-object-id]");
+    await waitFor(
+      async () => (await circle.count()) === 1,
+      "the circle to render",
+    );
+
+    // A circle renders as an ellipse, so it carries cx/cy/rx/ry and none of the
+    // x/y/width/height attributes `geometryOf` reads.
+    const metrics = async () => ({
+      cx: Number(await circle.getAttribute("cx")),
+      rx: Number(await circle.getAttribute("rx")),
+      ry: Number(await circle.getAttribute("ry")),
+    });
+    const before = await metrics();
+    expect(before.rx).toBeCloseTo(before.ry, 6);
+
+    const handle = window.locator('svg rect[data-handle="se"]');
+    await waitFor(
+      async () => (await handle.count()) === 1,
+      "a resize handle to appear",
+    );
+    const handleBox = await handle.boundingBox();
+    if (!handleBox) throw new Error("Resize handle reported no bounding box.");
+
+    // Measured from the handle centre, not its corner, so the delta is exactly
+    // 90 by 20 world units at 100% zoom. Deliberately lopsided: without the
+    // square constraint this produces rx 115 against ry 80 — an ellipse that
+    // still claims to be a circle, and nothing downstream can detect it.
+    const start = {
+      x: handleBox.x + handleBox.width / 2,
+      y: handleBox.y + handleBox.height / 2,
+    };
+    await drag(start, { x: start.x + 90, y: start.y + 20 });
+
+    await waitFor(
+      async () => (await metrics()).rx !== before.rx,
+      "the circle to resize",
+    );
+
+    const after = await metrics();
+    expect(after.rx).toBeGreaterThan(before.rx);
+    expect(after.rx).toBeCloseTo(after.ry, 6);
+    // The dominant axis drives both, so the diameter grows by 90 rather than by
+    // 90 horizontally and 20 vertically.
+    expect(after.rx * 2).toBeCloseTo(before.rx * 2 + 90, 0);
+    // The opposite corner stays anchored, exactly as it does unconstrained.
+    expect(after.cx - after.rx).toBeCloseTo(before.cx - before.rx, 0);
+  });
+
   it("brings a selected shape to the front and undoes it as one step", async () => {
     await drawShape("Rectangle", 100, 120, 1);
     await drawShape("Rectangle", 280, 120, 2);

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   MAX_ZOOM,
+  MIN_OBJECT_SIZE,
   MIN_ZOOM,
   boundsOfAll,
   boundsUnion,
@@ -17,6 +18,7 @@ import {
   objectBounds,
   panByScreen,
   portWorldPoint,
+  resizeTransform,
   screenToWorld,
   snapBounds,
   snapPoint,
@@ -26,7 +28,10 @@ import {
   zoomAt,
   zoomAtCenter,
 } from "../../src/renderer/src/editor/geometry";
-import type { Transform, Viewport } from "../../src/renderer/src/document/model";
+import type {
+  Transform,
+  Viewport,
+} from "../../src/renderer/src/document/model";
 
 const ORIGIN: Viewport = { x: 0, y: 0, zoom: 1 };
 
@@ -145,7 +150,11 @@ describe("zoomAt", () => {
 
 describe("fitViewport", () => {
   it("frames content with padding and stays within the zoom limits", () => {
-    const viewport = fitViewport({ x: 0, y: 0, width: 1000, height: 500 }, { x: 800, y: 600 }, 48);
+    const viewport = fitViewport(
+      { x: 0, y: 0, width: 1000, height: 500 },
+      { x: 800, y: 600 },
+      48,
+    );
     expect(viewport.zoom).toBeLessThanOrEqual(MAX_ZOOM);
     expect(viewport.zoom).toBeGreaterThan(0);
     // Content is wider relative to the frame, so width is the binding axis.
@@ -175,7 +184,11 @@ describe("fitViewport", () => {
   });
 
   it("never divides by zero when padding exceeds the viewport", () => {
-    const viewport = fitViewport({ x: 0, y: 0, width: 10, height: 10 }, { x: 20, y: 20 }, 500);
+    const viewport = fitViewport(
+      { x: 0, y: 0, width: 10, height: 10 },
+      { x: 20, y: 20 },
+      500,
+    );
     expect(Number.isFinite(viewport.zoom)).toBe(true);
     expect(viewport.zoom).toBeGreaterThanOrEqual(MIN_ZOOM);
   });
@@ -183,10 +196,18 @@ describe("fitViewport", () => {
 
 describe("bounds algebra", () => {
   it("unions overlapping and disjoint boxes", () => {
-    expect(boundsUnion({ x: 0, y: 0, width: 10, height: 10 }, { x: 5, y: 5, width: 10, height: 10 }))
-      .toEqual({ x: 0, y: 0, width: 15, height: 15 });
-    expect(boundsUnion({ x: 0, y: 0, width: 5, height: 5 }, { x: 100, y: 100, width: 5, height: 5 }))
-      .toEqual({ x: 0, y: 0, width: 105, height: 105 });
+    expect(
+      boundsUnion(
+        { x: 0, y: 0, width: 10, height: 10 },
+        { x: 5, y: 5, width: 10, height: 10 },
+      ),
+    ).toEqual({ x: 0, y: 0, width: 15, height: 15 });
+    expect(
+      boundsUnion(
+        { x: 0, y: 0, width: 5, height: 5 },
+        { x: 100, y: 100, width: 5, height: 5 },
+      ),
+    ).toEqual({ x: 0, y: 0, width: 105, height: 105 });
   });
 
   it("returns null for an empty set and the single box for one entry", () => {
@@ -210,12 +231,18 @@ describe("hit testing predicates", () => {
 
   it("detects intersection on all four edges and rejects separation", () => {
     expect(intersects(box, { x: 90, y: 90, width: 50, height: 50 })).toBe(true);
-    expect(intersects(box, { x: -40, y: 20, width: 50, height: 10 })).toBe(true);
-    expect(intersects(box, { x: 200, y: 200, width: 10, height: 10 })).toBe(false);
+    expect(intersects(box, { x: -40, y: 20, width: 50, height: 10 })).toBe(
+      true,
+    );
+    expect(intersects(box, { x: 200, y: 200, width: 10, height: 10 })).toBe(
+      false,
+    );
   });
 
   it("treats edge-touching boxes as non-intersecting", () => {
-    expect(intersects(box, { x: 100, y: 0, width: 10, height: 10 })).toBe(false);
+    expect(intersects(box, { x: 100, y: 0, width: 10, height: 10 })).toBe(
+      false,
+    );
   });
 
   it("includes the boundary for containsPoint", () => {
@@ -225,24 +252,38 @@ describe("hit testing predicates", () => {
   });
 
   it("requires full enclosure for containsBounds", () => {
-    expect(containsBounds(box, { x: 10, y: 10, width: 20, height: 20 })).toBe(true);
-    expect(containsBounds(box, { x: -1, y: 10, width: 20, height: 20 })).toBe(false);
-    expect(containsBounds(box, { x: 10, y: 10, width: 200, height: 20 })).toBe(false);
+    expect(containsBounds(box, { x: 10, y: 10, width: 20, height: 20 })).toBe(
+      true,
+    );
+    expect(containsBounds(box, { x: -1, y: 10, width: 20, height: 20 })).toBe(
+      false,
+    );
+    expect(containsBounds(box, { x: 10, y: 10, width: 200, height: 20 })).toBe(
+      false,
+    );
   });
 });
 
 describe("distanceToSegment", () => {
   it("returns the perpendicular distance inside the segment span", () => {
-    expect(distanceToSegment({ x: 5, y: 3 }, { x: 0, y: 0 }, { x: 10, y: 0 })).toBeCloseTo(3, 10);
+    expect(
+      distanceToSegment({ x: 5, y: 3 }, { x: 0, y: 0 }, { x: 10, y: 0 }),
+    ).toBeCloseTo(3, 10);
   });
 
   it("clamps to the nearest endpoint outside the span", () => {
-    expect(distanceToSegment({ x: -5, y: 0 }, { x: 0, y: 0 }, { x: 10, y: 0 })).toBeCloseTo(5, 10);
-    expect(distanceToSegment({ x: 15, y: 0 }, { x: 0, y: 0 }, { x: 10, y: 0 })).toBeCloseTo(5, 10);
+    expect(
+      distanceToSegment({ x: -5, y: 0 }, { x: 0, y: 0 }, { x: 10, y: 0 }),
+    ).toBeCloseTo(5, 10);
+    expect(
+      distanceToSegment({ x: 15, y: 0 }, { x: 0, y: 0 }, { x: 10, y: 0 }),
+    ).toBeCloseTo(5, 10);
   });
 
   it("degrades to point distance for a zero-length segment", () => {
-    expect(distanceToSegment({ x: 3, y: 4 }, { x: 0, y: 0 }, { x: 0, y: 0 })).toBeCloseTo(5, 10);
+    expect(
+      distanceToSegment({ x: 3, y: 4 }, { x: 0, y: 0 }, { x: 0, y: 0 }),
+    ).toBeCloseTo(5, 10);
     expect(distance({ x: 0, y: 0 }, { x: 3, y: 4 })).toBeCloseTo(5, 10);
   });
 });
@@ -272,7 +313,9 @@ describe("snapping", () => {
 
 describe("transformBounds", () => {
   it("returns the unrotated box when rotation is zero", () => {
-    expect(transformBounds(transform({ x: 10, y: 20, width: 100, height: 50 }))).toEqual({
+    expect(
+      transformBounds(transform({ x: 10, y: 20, width: 100, height: 50 })),
+    ).toEqual({
       x: 10,
       y: 20,
       width: 100,
@@ -281,7 +324,9 @@ describe("transformBounds", () => {
   });
 
   it("swaps width and height at 90 degrees about the centre", () => {
-    const box = transformBounds(transform({ x: 0, y: 0, width: 100, height: 50, rotation: 90 }));
+    const box = transformBounds(
+      transform({ x: 0, y: 0, width: 100, height: 50, rotation: 90 }),
+    );
     expect(box.width).toBeCloseTo(50, 6);
     expect(box.height).toBeCloseTo(100, 6);
     // Centre must not move under rotation.
@@ -290,7 +335,9 @@ describe("transformBounds", () => {
   });
 
   it("grows the bounding box at 45 degrees", () => {
-    const box = transformBounds(transform({ x: 0, y: 0, width: 100, height: 100, rotation: 45 }));
+    const box = transformBounds(
+      transform({ x: 0, y: 0, width: 100, height: 100, rotation: 45 }),
+    );
     const expected = 100 * Math.SQRT2;
     expect(box.width).toBeCloseTo(expected, 6);
     expect(box.height).toBeCloseTo(expected, 6);
@@ -335,8 +382,20 @@ describe("portWorldPoint", () => {
   });
 
   it("keeps ports equidistant from the centre under rotation", () => {
-    const unrotated = transform({ x: 0, y: 0, width: 200, height: 100, rotation: 0 });
-    const rotated = transform({ x: 0, y: 0, width: 200, height: 100, rotation: 37 });
+    const unrotated = transform({
+      x: 0,
+      y: 0,
+      width: 200,
+      height: 100,
+      rotation: 0,
+    });
+    const rotated = transform({
+      x: 0,
+      y: 0,
+      width: 200,
+      height: 100,
+      rotation: 37,
+    });
     const centre = { x: 100, y: 50 };
     const before = portWorldPoint(unrotated, { x: 1, y: 1 });
     const after = portWorldPoint(rotated, { x: 1, y: 1 });
@@ -349,5 +408,161 @@ describe("clamp", () => {
     expect(clamp(5, 0, 10)).toBe(5);
     expect(clamp(-1, 0, 10)).toBe(0);
     expect(clamp(11, 0, 10)).toBe(10);
+  });
+});
+
+describe("resizeTransform", () => {
+  // 100 x 50 at the origin, so the arithmetic below is readable.
+  const box = transform({ width: 100, height: 50 });
+  const square = transform({ width: 100, height: 100 });
+
+  it("moves only the dragged edge and anchors the opposite one", () => {
+    expect(resizeTransform(box, "e", 30, 0)).toMatchObject({
+      x: 0,
+      y: 0,
+      width: 130,
+      height: 50,
+    });
+    expect(resizeTransform(box, "w", -20, 0)).toMatchObject({
+      x: -20,
+      y: 0,
+      width: 120,
+      height: 50,
+    });
+    expect(resizeTransform(box, "s", 0, 25)).toMatchObject({
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 75,
+    });
+    expect(resizeTransform(box, "n", 0, -25)).toMatchObject({
+      x: 0,
+      y: -25,
+      width: 100,
+      height: 75,
+    });
+  });
+
+  it("moves both axes from a corner handle", () => {
+    expect(resizeTransform(box, "se", 30, 25)).toMatchObject({
+      x: 0,
+      y: 0,
+      width: 130,
+      height: 75,
+    });
+    expect(resizeTransform(box, "nw", -30, -25)).toMatchObject({
+      x: -30,
+      y: -25,
+      width: 130,
+      height: 75,
+    });
+  });
+
+  it("ignores a delta on an axis the handle does not control", () => {
+    // Dragging the north edge sideways must not shear the object.
+    expect(resizeTransform(box, "n", 999, 0)).toMatchObject({
+      x: 0,
+      width: 100,
+    });
+  });
+
+  it("clamps instead of inverting when dragged past the anchor", () => {
+    expect(resizeTransform(box, "e", -200, 0)).toMatchObject({
+      x: 0,
+      width: MIN_OBJECT_SIZE,
+    });
+    expect(resizeTransform(box, "w", 200, 0)).toMatchObject({
+      x: 100 - MIN_OBJECT_SIZE,
+      width: MIN_OBJECT_SIZE,
+    });
+  });
+
+  it("preserves rotation and flip flags it does not own", () => {
+    const rotated = transform({ width: 100, height: 50, rotation: 30 });
+    const result = resizeTransform({ ...rotated, flipX: true }, "e", 10, 0);
+    expect(result.rotation).toBe(30);
+    expect(result.flipX).toBe(true);
+  });
+
+  describe("square constraint", () => {
+    const squareOnly = { square: true };
+
+    it("keeps a corner drag square, letting the longer axis win", () => {
+      // Horizontal dominates.
+      expect(resizeTransform(square, "se", 30, 10, squareOnly)).toMatchObject({
+        x: 0,
+        y: 0,
+        width: 130,
+        height: 130,
+      });
+      // Vertical dominates: same result from the other axis.
+      expect(resizeTransform(square, "se", 10, 30, squareOnly)).toMatchObject({
+        x: 0,
+        y: 0,
+        width: 130,
+        height: 130,
+      });
+    });
+
+    it("anchors the opposite corner rather than the dragged one", () => {
+      const result = resizeTransform(square, "nw", -30, -10, squareOnly);
+      expect(result).toMatchObject({ x: -30, y: -30, width: 130, height: 130 });
+      // The south-east corner must not have moved.
+      expect(result.x + result.width).toBe(100);
+      expect(result.y + result.height).toBe(100);
+    });
+
+    it("grows symmetrically about the centre on the axis not dragged", () => {
+      const result = resizeTransform(square, "e", 40, 0, squareOnly);
+      expect(result).toMatchObject({ x: 0, y: -20, width: 140, height: 140 });
+      // The dragged edge follows the pointer; the vertical centre is preserved
+      // so the shape stays under the cursor instead of sliding away from it.
+      expect(result.y + result.height / 2).toBe(50);
+    });
+
+    it("applies the same rule from the north edge", () => {
+      const result = resizeTransform(square, "n", 0, -40, squareOnly);
+      expect(result).toMatchObject({ x: -20, y: -40, width: 140, height: 140 });
+      expect(result.x + result.width / 2).toBe(50);
+      expect(result.y + result.height).toBe(100);
+    });
+
+    it("holds the minimum size without becoming rectangular", () => {
+      const result = resizeTransform(square, "se", -200, -200, squareOnly);
+      expect(result).toMatchObject({
+        width: MIN_OBJECT_SIZE,
+        height: MIN_OBJECT_SIZE,
+      });
+    });
+
+    it("squares a non-square box, which the unconstrained path does not", () => {
+      // The contrast is the point: the same zero-delta resize leaves an ellipse
+      // alone but makes a circle round, so the constraint is what enforces the
+      // type's promise rather than the resize itself.
+      expect(resizeTransform(box, "se", 0, 0)).toMatchObject({
+        width: 100,
+        height: 50,
+      });
+      expect(resizeTransform(box, "se", 0, 0, squareOnly)).toMatchObject({
+        width: 100,
+        height: 100,
+      });
+    });
+
+    it("always yields equal width and height for every handle", () => {
+      const handles = ["nw", "n", "ne", "e", "se", "s", "sw", "w"] as const;
+      for (const handle of handles) {
+        for (const [dx, dy] of [
+          [40, 10],
+          [-25, 60],
+          [0, 0],
+          [-200, -200],
+        ]) {
+          const result = resizeTransform(square, handle, dx, dy, squareOnly);
+          expect(result.width).toBe(result.height);
+          expect(result.width).toBeGreaterThanOrEqual(MIN_OBJECT_SIZE);
+        }
+      }
+    });
   });
 });

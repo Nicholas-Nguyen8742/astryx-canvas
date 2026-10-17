@@ -7,7 +7,12 @@ import type {
   Transform,
   Viewport,
 } from "../document/model";
-import { clampZoom, panByScreen, zoomAt } from "../editor/geometry";
+import {
+  clampZoom,
+  panByScreen,
+  zoomAt,
+  type ResizeHandle,
+} from "../editor/geometry";
 import type { ShapeTool } from "../editor/factories";
 
 /** TRD §14.5. */
@@ -28,7 +33,10 @@ export type ActiveTool =
   | "pan"
   | "zoom";
 
-export type ResizeHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+// Re-exported so existing importers keep resolving the type from the store. It
+// lives in geometry because the resize algebra that consumes it does, and
+// geometry must not depend on a zustand store.
+export type { ResizeHandle };
 
 /**
  * A gesture in progress.
@@ -54,6 +62,12 @@ export type Interaction =
       handle: ResizeHandle;
       startWorld: Point;
       from: Transform;
+      /**
+       * Captured once at pointerdown from the object's type, so a circle stays
+       * round without re-looking-up the object on every pointermove. See
+       * `ResizeConstraints.square`.
+       */
+      square: boolean;
     }
   | { kind: "create"; tool: ShapeTool; startWorld: Point; currentWorld: Point };
 

@@ -321,3 +321,91 @@ export function portWorldPoint(transform: Transform, port: Point): Point {
     y: centerY + localX * Math.sin(radians) + localY * Math.cos(radians),
   };
 }
+
+/** Which edge or corner of an object's box a resize is dragging. */
+export type ResizeHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+
+/**
+ * Smallest box a resize may produce. Without a floor, dragging a handle past its
+ * anchor leaves an object too small to select again — effectively undeletable
+ * through the UI.
+ */
+export const MIN_OBJECT_SIZE = 4;
+
+export interface ResizeConstraints {
+  /**
+   * Keep the result square, so one side drives both axes.
+   *
+   * Required by `circle`: its type asserts a property its transform would
+   * otherwise be free to violate, and a shape that stops being round while still
+   * claiming to be a circle is a defect no renderer can detect, because every
+   * layer downstream faithfully draws the box it is given.
+   */
+  square?: boolean;
+}
+
+/**
+ * Resizes from a dragged handle while keeping the opposite edge anchored, and
+ * refuses to invert: dragging past the anchor clamps rather than flipping, which
+ * is what makes a resize feel predictable.
+ *
+ * Under `square`, the longer axis wins — the same rule the circle's drag-create
+ * gesture uses, so drawing one and then resizing it cannot disagree about what a
+ * circle is. The dragged edge still follows the pointer and the opposite edge
+ * stays anchored; on the axis that was not dragged, growth is symmetric about the
+ * centre so the shape stays under the cursor instead of sliding away from it.
+ */
+export function resizeTransform(
+  from: Transform,
+  handle: ResizeHandle,
+  dx: number,
+  dy: number,
+  constraints: ResizeConstraints = {},
+): Transform {
+  let left = from.x;
+  let top = from.y;
+  let right = from.x + from.width;
+  let bottom = from.y + from.height;
+
+  if (handle.includes("w")) left += dx;
+  if (handle.includes("e")) right += dx;
+  if (handle.includes("n")) top += dy;
+  if (handle.includes("s")) bottom += dy;
+
+  if (constraints.square) {
+    const side = Math.max(right - left, bottom - top, MIN_OBJECT_SIZE);
+
+    if (handle.includes("e")) right = left + side;
+    else if (handle.includes("w")) left = right - side;
+    else {
+      const centerX = (left + right) / 2;
+      left = centerX - side / 2;
+      right = centerX + side / 2;
+    }
+
+    if (handle.includes("s")) bottom = top + side;
+    else if (handle.includes("n")) top = bottom - side;
+    else {
+      const centerY = (top + bottom) / 2;
+      top = centerY - side / 2;
+      bottom = centerY + side / 2;
+    }
+  } else {
+    if (right - left < MIN_OBJECT_SIZE) {
+      if (handle.includes("w")) left = right - MIN_OBJECT_SIZE;
+      else right = left + MIN_OBJECT_SIZE;
+    }
+    if (bottom - top < MIN_OBJECT_SIZE) {
+      if (handle.includes("n")) top = bottom - MIN_OBJECT_SIZE;
+      else bottom = top + MIN_OBJECT_SIZE;
+    }
+  }
+
+  return {
+    ...from,
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+  };
+}

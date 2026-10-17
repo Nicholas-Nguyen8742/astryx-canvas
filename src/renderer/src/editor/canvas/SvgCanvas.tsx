@@ -12,6 +12,7 @@ import type { DiagramObject, Point, Transform } from "../../document/model";
 import {
   intersects,
   objectBounds,
+  resizeTransform,
   screenToWorld,
   snapPoint,
   worldToScreen,
@@ -46,7 +47,6 @@ import { TextEditorOverlay } from "./TextEditorOverlay";
 const HANDLE_SCREEN_SIZE = 8;
 /** A line has no fill to click, so it gets an invisible constant-width hit stroke. */
 const LINE_HIT_WIDTH = 12;
-const MIN_OBJECT_SIZE = 4;
 /** Arrow-key nudge step in world units; Shift multiplies it (FR-OBJ-14/15). */
 const NUDGE_STEP = 1;
 const NUDGE_STEP_COARSE = 10;
@@ -95,45 +95,6 @@ function handleOffset(handle: ResizeHandle): Point {
   return {
     x: handle.includes("w") ? 0 : handle.includes("e") ? 1 : 0.5,
     y: handle.includes("n") ? 0 : handle.includes("s") ? 1 : 0.5,
-  };
-}
-
-/**
- * Resizes from a dragged handle while keeping the opposite edge anchored, and
- * refuses to invert: dragging past the anchor clamps rather than flipping, which
- * is what makes a resize feel predictable.
- */
-export function resizeTransform(
-  from: Transform,
-  handle: ResizeHandle,
-  dx: number,
-  dy: number,
-): Transform {
-  let left = from.x;
-  let top = from.y;
-  let right = from.x + from.width;
-  let bottom = from.y + from.height;
-
-  if (handle.includes("w")) left += dx;
-  if (handle.includes("e")) right += dx;
-  if (handle.includes("n")) top += dy;
-  if (handle.includes("s")) bottom += dy;
-
-  if (right - left < MIN_OBJECT_SIZE) {
-    if (handle.includes("w")) left = right - MIN_OBJECT_SIZE;
-    else right = left + MIN_OBJECT_SIZE;
-  }
-  if (bottom - top < MIN_OBJECT_SIZE) {
-    if (handle.includes("n")) top = bottom - MIN_OBJECT_SIZE;
-    else bottom = top + MIN_OBJECT_SIZE;
-  }
-
-  return {
-    ...from,
-    x: left,
-    y: top,
-    width: right - left,
-    height: bottom - top,
   };
 }
 
@@ -463,6 +424,9 @@ export function SvgCanvas() {
           handle,
           startWorld: world,
           from: found.transform,
+          // A circle must stay round; see ResizeConstraints.square. Resolved
+          // here rather than per pointermove so the drag does no extra lookup.
+          square: found.type === "circle",
         });
         return;
       }
@@ -545,7 +509,9 @@ export function SvgCanvas() {
         const dx = world.x - current.startWorld.x;
         const dy = world.y - current.startWorld.y;
         doc.setTransforms({
-          [current.id]: resizeTransform(current.from, current.handle, dx, dy),
+          [current.id]: resizeTransform(current.from, current.handle, dx, dy, {
+            square: current.square,
+          }),
         });
         break;
       }
