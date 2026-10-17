@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  CreateConnectorsCommand,
   CreateObjectsCommand,
+  DeleteConnectorsCommand,
   DeleteObjectsCommand,
   MoveObjectsCommand,
   ResizeObjectCommand,
@@ -9,6 +11,7 @@ import {
   UpdateStyleCommand,
 } from "../../src/renderer/src/editor/commands/object-commands";
 import {
+  createConnector,
   createObject,
   identityTransform,
 } from "../../src/renderer/src/editor/factories";
@@ -18,6 +21,7 @@ import {
   createHistoryStore,
 } from "../../src/renderer/src/state/history-store";
 import type {
+  Connector,
   DiagramObject,
   Transform,
 } from "../../src/renderer/src/document/model";
@@ -457,5 +461,234 @@ describe("history store", () => {
     history.getState().clear();
     expect(history.getState().past).toEqual([]);
     expect(history.getState().future).toEqual([]);
+  });
+});
+
+describe("connectors", () => {
+  function makeConnector(
+    id: string,
+    source: string,
+    target: string,
+  ): Connector {
+    return {
+      ...createConnector({ objectId: source }, { objectId: target }),
+      id,
+    };
+  }
+
+  function connectorIds(
+    store: ReturnType<typeof createDocumentStore>,
+  ): string[] {
+    return store
+      .getState()
+      .getConnectors()
+      .map((entry) => entry.id);
+  }
+
+  /**
+   * Three shapes wired a->b, b->c and a->c, so every delete has a distinct set
+   * of connectors it should take with it and one it should leave alone.
+   */
+  function wiredStore() {
+    const store = createDocumentStore();
+    store
+      .getState()
+      .insertObjects([makeObject("a"), makeObject("b"), makeObject("c")]);
+    store
+      .getState()
+      .insertConnectors([
+        makeConnector("conn1", "a", "b"),
+        makeConnector("conn2", "b", "c"),
+        makeConnector("conn3", "a", "c"),
+      ]);
+    return store;
+  }
+
+  describe("document state", () => {
+    it("inserts connectors and keeps zIndex a mirror of array order", () => {
+      const store = wiredStore();
+      expect(connectorIds(store)).toEqual(["conn1", "conn2", "conn3"]);
+      expect(
+        store
+          .getState()
+          .getConnectors()
+          .map((entry) => entry.zIndex),
+      ).toEqual([0, 1, 2]);
+    });
+
+    it("extracts a connector with its index and restores it in place", () => {
+      const store = wiredStore();
+      const extracted = store.getState().extractConnectors(["conn2"]);
+      expect(connectorIds(store)).toEqual(["conn1", "conn3"]);
+      expect(extracted.map((entry) => entry.index)).toEqual([1]);
+
+      store.getState().restoreConnectors(extracted);
+      expect(connectorIds(store)).toEqual(["conn1", "conn2", "conn3"]);
+    });
+
+    it("restores several connectors to their original positions, not on top", () => {
+      const store = wiredStore();
+      const extracted = store.getState().extractConnectors(["conn1", "conn3"]);
+      expect(connectorIds(store)).toEqual(["conn2"]);
+
+      store.getState().restoreConnectors(extracted);
+      expect(connectorIds(store)).toEqual(["conn1", "conn2", "conn3"]);
+    });
+
+    it("returns a copy from getConnectors so callers cannot reorder the store", () => {
+      const store = wiredStore();
+      store.getState().getConnectors().reverse();
+      expect(connectorIds(store)).toEqual(["conn1", "conn2", "conn3"]);
+    });
+
+    it("ignores empty connector mutations", () => {
+      const store = wiredStore();
+      store.getState().markClean();
+      store.getState().insertConnectors([]);
+      store.getState().restoreConnectors([]);
+      expect(connectorIds(store)).toHaveLength(3);
+      expect(store.getState().isDirty).toBe(false);
+    });
+
+    it("marks the document dirty on a connector mutation", () => {
+      const store = createDocumentStore();
+      expect(store.getState().isDirty).toBe(false);
+      store.getState().insertConnectors([makeConnector("conn1", "a", "b")]);
+      expect(store.getState().isDirty).toBe(true);
+    });
+
+    it("matches a connector attached at either end", () => {
+      const store = wiredStore();
+      expect(store.getState().connectorsTouching(["a"]).sort()).toEqual([
+        "conn1",
+        "conn3",
+      ]);
+      expect(store.getState().connectorsTouching(["b"]).sort()).toEqual([
+        "conn1",
+        "conn2",
+      ]);
+      expect(store.getState().connectorsTouching(["c"]).sort()).toEqual([
+        "conn2",
+        "conn3",
+      ]);
+    });
+
+    it("reports nothing for an object that has no connectors", () => {
+      const store = wiredStore();
+      store.getState().insertObjects([makeObject("d")]);
+      expect(store.getState().connectorsTouching(["d"])).toEqual([]);
+    });
+
+    it("lists a connector once when both of its ends are being deleted", () => {
+      const store = wiredStore();
+      const touching = store.getState().connectorsTouching(["a", "b"]);
+      expect(touching.filter((id) => id === "conn1")).toHaveLength(1);
+      expect(touching.sort()).toEqual(["conn1", "conn2", "conn3"]);
+    });
+  });
+
+  describe("commands", () => {
+    it("creates a connector and removes it on undo", () => {
+      const store = createDocumentStore();
+      store.getState().insertObjects([makeObject("a"), makeObject("b")]);
+      const command = new CreateConnectorsCommand(store.getState(), [
+        makeConnector("conn1", "a", "b"),
+      ]);
+
+      expect(command.label).toBe("Create connector");
+      command.execute();
+      expect(connectorIds(store)).toEqual(["conn1"]);
+
+      command.undo();
+      expect(connectorIds(store)).toEqual([]);
+    });
+
+    it("pluralises the create label", () => {
+      const store = createDocumentStore();
+      const command = new CreateConnectorsCommand(store.getState(), [
+        makeConnector("c1", "a", "b"),
+        makeConnector("c2", "b", "c"),
+      ]);
+      expect(command.label).toBe("Create 2 connectors");
+    });
+
+    it("deletes a connector and restores it at its original index", () => {
+      const store = wiredStore();
+      const command = new DeleteConnectorsCommand(store.getState(), ["conn2"]);
+      expect(command.label).toBe("Delete connector");
+
+      command.execute();
+      expect(connectorIds(store)).toEqual(["conn1", "conn3"]);
+
+      command.undo();
+      expect(connectorIds(store)).toEqual(["conn1", "conn2", "conn3"]);
+    });
+
+    it("round-trips through undo and redo in the history store", () => {
+      const store = wiredStore();
+      const history = createHistoryStore();
+
+      history
+        .getState()
+        .execute(new DeleteConnectorsCommand(store.getState(), ["conn1"]));
+      expect(connectorIds(store)).toEqual(["conn2", "conn3"]);
+
+      history.getState().undo();
+      expect(connectorIds(store)).toEqual(["conn1", "conn2", "conn3"]);
+
+      history.getState().redo();
+      expect(connectorIds(store)).toEqual(["conn2", "conn3"]);
+    });
+  });
+
+  describe("deleting a shape takes its connectors with it", () => {
+    it("removes only the connectors attached to the deleted object", () => {
+      const store = wiredStore();
+      new DeleteObjectsCommand(store.getState(), ["a"]).execute();
+
+      expect(store.getState().getObjectOrder()).toEqual(["b", "c"]);
+      expect(connectorIds(store)).toEqual(["conn2"]);
+    });
+
+    it("restores the shape and its connectors as one undo", () => {
+      const store = wiredStore();
+      const command = new DeleteObjectsCommand(store.getState(), ["a"]);
+      command.execute();
+      command.undo();
+
+      expect(store.getState().getObjectOrder()).toEqual(["a", "b", "c"]);
+      expect(connectorIds(store)).toEqual(["conn1", "conn2", "conn3"]);
+    });
+
+    it("leaves every connector alone when the deleted object has none", () => {
+      const store = wiredStore();
+      store.getState().insertObjects([makeObject("d")]);
+      new DeleteObjectsCommand(store.getState(), ["d"]).execute();
+
+      expect(store.getState().getObjectOrder()).toEqual(["a", "b", "c"]);
+      expect(connectorIds(store)).toEqual(["conn1", "conn2", "conn3"]);
+    });
+
+    it("survives two sequential deletes, each undoable on its own", () => {
+      const store = wiredStore();
+      const history = createHistoryStore();
+
+      history
+        .getState()
+        .execute(new DeleteObjectsCommand(store.getState(), ["a"]));
+      history
+        .getState()
+        .execute(new DeleteObjectsCommand(store.getState(), ["b"]));
+      expect(connectorIds(store)).toEqual([]);
+      expect(store.getState().getObjectOrder()).toEqual(["c"]);
+
+      history.getState().undo();
+      expect(connectorIds(store)).toEqual(["conn2"]);
+      expect(store.getState().getObjectOrder()).toEqual(["b", "c"]);
+
+      history.getState().undo();
+      expect(connectorIds(store)).toEqual(["conn1", "conn2", "conn3"]);
+      expect(store.getState().getObjectOrder()).toEqual(["a", "b", "c"]);
+    });
   });
 });

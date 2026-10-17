@@ -1,4 +1,5 @@
 import type {
+  Connector,
   DiagramObject,
   DiagramStyle,
   TextContent,
@@ -11,6 +12,12 @@ import type {
  */
 export interface ExtractedObject {
   object: DiagramObject;
+  index: number;
+}
+
+/** As `ExtractedObject`, for connectors. */
+export interface ExtractedConnector {
+  connector: Connector;
   index: number;
 }
 
@@ -52,6 +59,20 @@ export interface DocumentMutator {
    * nothing but a wrong z position.
    */
   setObjectOrder(order: readonly string[]): void;
+  /** Connectors on the active page, in document order. */
+  getConnectors(): Connector[];
+  insertConnectors(connectors: readonly Connector[]): void;
+  extractConnectors(ids: readonly string[]): ExtractedConnector[];
+  restoreConnectors(extracted: readonly ExtractedConnector[]): void;
+  /**
+   * Ids of connectors attached to any of `objectIds`, at either end.
+   *
+   * Deleting a shape has to take its connectors with it. A connector whose
+   * endpoint object is gone resolves to nothing, so it renders as absent while
+   * still living in the saved document — a silent orphan that accumulates across
+   * edits and reappears if the shape is ever restored by hand.
+   */
+  connectorsTouching(objectIds: readonly string[]): string[];
 }
 
 /**

@@ -1,10 +1,16 @@
 import type {
+  Connector,
   DiagramObject,
   DiagramStyle,
   TextContent,
   Transform,
 } from "../../document/model";
-import type { DocumentMutator, EditorCommand, ExtractedObject } from "./index";
+import type {
+  DocumentMutator,
+  EditorCommand,
+  ExtractedConnector,
+  ExtractedObject,
+} from "./index";
 import { reorderIds, zOrderLabel, type ZOrderMove } from "../z-order";
 
 let sequence = 0;
@@ -50,6 +56,7 @@ export class DeleteObjectsCommand implements EditorCommand {
   readonly label: string;
   readonly timestamp = new Date().toISOString();
   private extracted: ExtractedObject[] = [];
+  private extractedConnectors: ExtractedConnector[] = [];
 
   constructor(
     private readonly mutator: DocumentMutator,
@@ -59,11 +66,20 @@ export class DeleteObjectsCommand implements EditorCommand {
   }
 
   execute(): void {
+    // Connectors first, and in the same command. A connector whose endpoint
+    // object is gone resolves to nothing, so leaving it behind would keep an
+    // invisible orphan in the saved document that no undo entry accounts for.
+    // Capturing both here means one undo restores the shape and its edges
+    // together, which is what the user thinks happened.
+    this.extractedConnectors = this.mutator.extractConnectors(
+      this.mutator.connectorsTouching(this.ids),
+    );
     this.extracted = this.mutator.extractObjects(this.ids);
   }
 
   undo(): void {
     this.mutator.restoreObjects(this.extracted);
+    this.mutator.restoreConnectors(this.extractedConnectors);
   }
 }
 
@@ -248,5 +264,56 @@ export class ReorderObjectsCommand implements EditorCommand {
 
   undo(): void {
     this.mutator.setObjectOrder(this.before);
+  }
+}
+
+/** Connectors drawn between two objects (FR-CONN-01). */
+export class CreateConnectorsCommand implements EditorCommand {
+  readonly id = nextCommandId("create-connector");
+  readonly label: string;
+  readonly timestamp = new Date().toISOString();
+
+  constructor(
+    private readonly mutator: DocumentMutator,
+    private readonly connectors: readonly Connector[],
+  ) {
+    this.label = `Create ${describeCount(connectors.length, "connector")}`;
+  }
+
+  execute(): void {
+    this.mutator.insertConnectors(this.connectors);
+  }
+
+  undo(): void {
+    this.mutator.extractConnectors(
+      this.connectors.map((connector) => connector.id),
+    );
+  }
+}
+
+/**
+ * Connectors removed on their own, as distinct from the cascade in
+ * `DeleteObjectsCommand`. Both restore by index, so an undo puts a connector
+ * back at its original position in the paint order rather than on top.
+ */
+export class DeleteConnectorsCommand implements EditorCommand {
+  readonly id = nextCommandId("delete-connector");
+  readonly label: string;
+  readonly timestamp = new Date().toISOString();
+  private extracted: ExtractedConnector[] = [];
+
+  constructor(
+    private readonly mutator: DocumentMutator,
+    private readonly ids: readonly string[],
+  ) {
+    this.label = `Delete ${describeCount(ids.length, "connector")}`;
+  }
+
+  execute(): void {
+    this.extracted = this.mutator.extractConnectors(this.ids);
+  }
+
+  undo(): void {
+    this.mutator.restoreConnectors(this.extracted);
   }
 }

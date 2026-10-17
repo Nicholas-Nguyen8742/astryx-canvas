@@ -1,16 +1,22 @@
 import { create } from "zustand";
 
 import type {
+  Connector,
   DiagramDocument,
   DiagramObject,
   DiagramStyle,
   DocumentMeta,
+  Page,
   TextContent,
   Transform,
   Viewport,
 } from "../document/model";
 import { createEmptyDocument } from "../document/empty-document";
-import type { DocumentMutator, ExtractedObject } from "../editor/commands";
+import type {
+  DocumentMutator,
+  ExtractedConnector,
+  ExtractedObject,
+} from "../editor/commands";
 
 export interface DocumentState extends DocumentMutator {
   document: DiagramDocument;
@@ -28,10 +34,13 @@ export interface DocumentState extends DocumentMutator {
  * renderer consumes. `zIndex` is kept as a denormalised mirror of it so the
  * serialised document stays readable and z-order operations have somewhere to
  * write, but the two can never disagree.
+ *
+ * Generic over anything carrying a `zIndex`, so connectors mirror their own
+ * array by exactly the same rule as objects.
  */
-function reindex(objects: readonly DiagramObject[]): DiagramObject[] {
-  return objects.map((object, index) =>
-    object.zIndex === index ? object : { ...object, zIndex: index },
+function reindex<T extends { zIndex: number }>(items: readonly T[]): T[] {
+  return items.map((item, index) =>
+    item.zIndex === index ? item : { ...item, zIndex: index },
   );
 }
 
@@ -43,27 +52,49 @@ export function createDocumentStore(
   initialDocument: DiagramDocument = createEmptyDocument(),
 ) {
   return create<DocumentState>()((set, get) => {
-    const mutateObjects = (
-      fn: (objects: readonly DiagramObject[]) => DiagramObject[],
-    ): void => {
+    /**
+     * The one path that writes to the active page. Objects and connectors share
+     * it so both dirty the document, both target only the active page, and both
+     * re-stamp `zIndex` from array position by the same rule.
+     */
+    const mutatePage = (fn: (page: Page) => Page): void => {
       const { document, activePageId } = get();
       set({
         isDirty: true,
         document: {
           ...document,
           pages: document.pages.map((page) =>
-            page.id === activePageId
-              ? { ...page, objects: reindex(fn(page.objects)) }
-              : page,
+            page.id === activePageId ? fn(page) : page,
           ),
         },
       });
     };
 
+    const mutateObjects = (
+      fn: (objects: readonly DiagramObject[]) => DiagramObject[],
+    ): void =>
+      mutatePage((page) => ({ ...page, objects: reindex(fn(page.objects)) }));
+
+    const mutateConnectors = (
+      fn: (connectors: readonly Connector[]) => Connector[],
+    ): void =>
+      mutatePage((page) => ({
+        ...page,
+        connectors: reindex(fn(page.connectors)),
+      }));
+
     const activeObjects = (): readonly DiagramObject[] => {
       const { document, activePageId } = get();
       return (
         document.pages.find((page) => page.id === activePageId)?.objects ?? []
+      );
+    };
+
+    const activeConnectors = (): readonly Connector[] => {
+      const { document, activePageId } = get();
+      return (
+        document.pages.find((page) => page.id === activePageId)?.connectors ??
+        []
       );
     };
 
@@ -227,6 +258,57 @@ export function createDocumentStore(
           for (const object of remaining.values()) sorted.push(object);
           return sorted;
         });
+      },
+
+      getConnectors() {
+        // Copied, so a caller sorting or splicing the result cannot reorder the
+        // store's own array behind its back.
+        return [...activeConnectors()];
+      },
+
+      insertConnectors(connectors) {
+        if (connectors.length === 0) return;
+        mutateConnectors((existing) => [...existing, ...connectors]);
+      },
+
+      extractConnectors(ids) {
+        const wanted = new Set(ids);
+        const extracted: ExtractedConnector[] = [];
+        // As with extractObjects, the updater records what it removed so the
+        // caller can undo it. `set` is synchronous, so `extracted` is complete by
+        // the time mutateConnectors returns.
+        mutateConnectors((connectors) => {
+          const kept: Connector[] = [];
+          connectors.forEach((connector, index) => {
+            if (wanted.has(connector.id)) extracted.push({ connector, index });
+            else kept.push(connector);
+          });
+          return kept;
+        });
+        return extracted;
+      },
+
+      restoreConnectors(extracted) {
+        if (extracted.length === 0) return;
+        const ordered = [...extracted].sort((a, b) => a.index - b.index);
+        mutateConnectors((connectors) => {
+          const next = [...connectors];
+          for (const { connector, index } of ordered) {
+            next.splice(Math.min(index, next.length), 0, connector);
+          }
+          return next;
+        });
+      },
+
+      connectorsTouching(objectIds) {
+        const wanted = new Set(objectIds);
+        return activeConnectors()
+          .filter(
+            (connector) =>
+              wanted.has(connector.source.objectId) ||
+              wanted.has(connector.target.objectId),
+          )
+          .map((connector) => connector.id);
       },
     };
   });

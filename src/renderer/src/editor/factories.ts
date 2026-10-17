@@ -1,4 +1,8 @@
 import type {
+  Connector,
+  ConnectorEndpoint,
+  ConnectorRouting,
+  ConnectorStyle,
   DiagramObject,
   DiagramStyle,
   ObjectType,
@@ -146,6 +150,61 @@ export function defaultSizeFor(tool: ShapeTool): {
   height: number;
 } {
   return DEFAULT_SIZES[tool];
+}
+
+/**
+ * Default connector appearance.
+ *
+ * Token plus hex for the same reason as `DEFAULT_STROKE`: the live canvas paints
+ * the token so connector lines follow theme and dark-mode changes, and a
+ * standalone export falls back to the hex once it leaves the app's stylesheet.
+ *
+ * `DocumentSettings.connectorDefaults` is the per-document override and is not
+ * consulted here yet — that belongs with the inspector, where style defaults
+ * become user-editable. Until then a loaded document's connector defaults are
+ * preserved on save but do not affect newly drawn connectors.
+ */
+export const DEFAULT_CONNECTOR_STROKE: ColorValue = {
+  token: "--color-accent",
+  hex: "#1b1b1b",
+};
+
+export function defaultConnectorStyle(): ConnectorStyle {
+  return {
+    stroke: DEFAULT_CONNECTOR_STROKE,
+    strokeWidth: 2,
+    opacity: 1,
+    endArrow: "triangle",
+  };
+}
+
+/**
+ * Creates a connector between two endpoints (FR-CONN-01).
+ *
+ * Endpoints are object-relative, so the returned connector has no coordinates of
+ * its own: `resolveConnector` derives the path from the objects it points at.
+ * That is what makes it follow a shape when the shape moves.
+ */
+export function createConnector(
+  source: ConnectorEndpoint,
+  target: ConnectorEndpoint,
+  overrides: {
+    routing?: ConnectorRouting;
+    style?: Partial<ConnectorStyle>;
+    label?: TextContent;
+  } = {},
+): Connector {
+  return {
+    id: nextId("conn"),
+    source,
+    target,
+    routing: overrides.routing ?? "straight",
+    style: { ...defaultConnectorStyle(), ...overrides.style },
+    label: overrides.label,
+    zIndex: 0,
+    visible: true,
+    locked: false,
+  };
 }
 
 /**
