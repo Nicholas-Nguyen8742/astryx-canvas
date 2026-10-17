@@ -19,16 +19,19 @@ import {
 import {
   createObject,
   normaliseDragTransform,
+  previewObject,
   type ShapeTool,
 } from "../factories";
 import {
   CreateObjectsCommand,
   DeleteObjectsCommand,
   MoveObjectsCommand,
+  ReorderObjectsCommand,
   ResizeObjectCommand,
   UpdateContentCommand,
 } from "../commands/object-commands";
 import { copyObjects, pasteObjects } from "../clipboard";
+import type { ZOrderMove } from "../z-order";
 import { useDocumentStore } from "../../state/document-store";
 import { useHistoryStore } from "../../state/history-store";
 import {
@@ -36,7 +39,7 @@ import {
   useEditorStore,
   type ResizeHandle,
 } from "../../state/editor-store";
-import { ARROW_MARKER_ID, lineEndpoints, shapeGeometry } from "./shape-attrs";
+import { ARROW_MARKER_ID, shapeGeometry } from "./shape-attrs";
 import { TextEditorOverlay } from "./TextEditorOverlay";
 
 /** Handle edge length in screen pixels, so handles stay grabbable at any zoom. */
@@ -68,6 +71,24 @@ const NUDGE_DELTAS: Record<string, Point> = {
   ArrowRight: { x: 1, y: 0 },
   ArrowUp: { x: 0, y: -1 },
   ArrowDown: { x: 0, y: 1 },
+};
+
+/**
+ * Z-order bindings (FR-OBJ-11). Bracket keys, matching every other drawing tool,
+ * with Shift for the absolute jumps to the front and back of the stack.
+ *
+ * Keyed on `event.code`, not `event.key`. Two reasons, both of which would
+ * silently break the shifted half of the feature rather than fail visibly:
+ * holding Shift makes a bracket key report `}` or `{` as its `key`, and on a
+ * non-US layout the physical bracket keys report entirely different characters.
+ * `code` identifies the physical key and is stable across both.
+ */
+const Z_ORDER_CODES: Record<
+  string,
+  { plain: ZOrderMove; shifted: ZOrderMove }
+> = {
+  BracketRight: { plain: "forward", shifted: "front" },
+  BracketLeft: { plain: "backward", shifted: "back" },
 };
 
 function handleOffset(handle: ResizeHandle): Point {
@@ -116,10 +137,28 @@ export function resizeTransform(
   };
 }
 
-function RenderedObject({ object }: { object: DiagramObject }) {
+/**
+ * Draws one document object.
+ *
+ * The same component renders committed objects and the in-progress drag preview
+ * (`isPreview`), because both are real `DiagramObject`s passed through
+ * `shapeGeometry`. That is what stops the preview from being a second,
+ * simplified approximation of a shape that can drift from what the gesture
+ * actually creates.
+ */
+function RenderedObject({
+  object,
+  isPreview = false,
+}: {
+  object: DiagramObject;
+  isPreview?: boolean;
+}) {
   const geometry = shapeGeometry(object, "dom");
   const common = {
-    "data-object-id": object.id,
+    // A preview is not an object, so it must stay unresolvable to the
+    // `data-object-id` hit testing that drives selection and inline editing.
+    ...(isPreview ? {} : { "data-object-id": object.id }),
+    ...(isPreview ? { className: "canvas-preview" } : {}),
     style: { pointerEvents: object.locked ? ("none" as const) : undefined },
   };
 
@@ -160,15 +199,24 @@ function RenderedObject({ object }: { object: DiagramObject }) {
     return <ellipse {...geometry.attrs} {...common} />;
   }
 
+  if (geometry.element === "polygon") {
+    return <polygon {...geometry.attrs} {...common} />;
+  }
+
   return <rect {...geometry.attrs} {...common} />;
 }
 
 /**
- * The in-progress shape while dragging out a new object.
+ * The in-progress shape while dragging out a new object (TRD §14.5).
  *
- * Deliberately not a `DiagramObject`: building one per pointer-move would mint a
- * fresh id on every frame and churn the factory counter for something that is
- * discarded unless the gesture completes.
+ * A thin wrapper: the preview is a real `DiagramObject` with a reserved id that
+ * is never inserted into the document, so the geometry seen mid-drag comes from
+ * exactly the code that draws the committed shape. Adding a shape to
+ * `shapeGeometry` therefore adds it to the preview for free.
+ *
+ * Losing the `vectorEffect` the old bespoke preview used is deliberate. A
+ * committed shape's stroke is in world units, so holding the preview's stroke
+ * constant in screen space made the preview the one inaccurate thing on screen.
  */
 function ShapePreview({
   tool,
@@ -177,47 +225,7 @@ function ShapePreview({
   tool: ShapeTool;
   transform: Transform;
 }) {
-  const shared = {
-    className: "canvas-preview",
-    fill: "none",
-    strokeWidth: 2,
-    vectorEffect: "non-scaling-stroke" as const,
-    strokeDasharray: "6 4",
-    pointerEvents: "none" as const,
-  };
-
-  if (tool === "ellipse") {
-    return (
-      <ellipse
-        {...shared}
-        cx={transform.x + transform.width / 2}
-        cy={transform.y + transform.height / 2}
-        rx={Math.max(transform.width / 2, 0)}
-        ry={Math.max(transform.height / 2, 0)}
-      />
-    );
-  }
-
-  if (tool === "line" || tool === "arrow") {
-    return (
-      <line
-        {...shared}
-        {...lineEndpoints(transform)}
-        markerEnd={tool === "arrow" ? `url(#${ARROW_MARKER_ID})` : undefined}
-      />
-    );
-  }
-
-  return (
-    <rect
-      {...shared}
-      x={transform.x}
-      y={transform.y}
-      width={Math.max(transform.width, 0)}
-      height={Math.max(transform.height, 0)}
-      rx={tool === "roundedRectangle" ? 12 : 0}
-    />
-  );
+  return <RenderedObject object={previewObject(tool, transform)} isPreview />;
 }
 
 export function SvgCanvas() {
@@ -344,6 +352,29 @@ export function SvgCanvas() {
           hist.execute(new CreateObjectsCommand(doc, duplicates));
           editor.setSelection(duplicates.map((object) => object.id));
           event.preventDefault();
+          return;
+        }
+
+        // Z-order (FR-OBJ-11). Inside the modifier block because a bare bracket
+        // key means nothing here, but after the clipboard keys so those keep
+        // priority over an unrelated binding. Looked up by physical key code —
+        // see Z_ORDER_CODES.
+        const zOrder = Z_ORDER_CODES[event.code];
+        if (zOrder) {
+          const ids = editor.selection;
+          if (ids.length === 0) return;
+          const command = new ReorderObjectsCommand(
+            doc,
+            ids,
+            event.shiftKey ? zOrder.shifted : zOrder.plain,
+          );
+          // A shape already at the end of the stack has nothing to do, and
+          // recording the no-op would put an entry in the history that undoes
+          // nothing while evicting real work from the cap.
+          if (command.isNoOp) return;
+          hist.execute(command);
+          event.preventDefault();
+          return;
         }
       }
 

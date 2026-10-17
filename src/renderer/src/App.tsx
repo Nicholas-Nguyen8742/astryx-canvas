@@ -37,6 +37,8 @@ import { fitViewport, screenToWorld, zoomAtCenter } from "./editor/geometry";
 import { useDocumentStore } from "./state/document-store";
 import { useEditorStore, type ActiveTool } from "./state/editor-store";
 import { useHistoryStore } from "./state/history-store";
+import { ReorderObjectsCommand } from "./editor/commands/object-commands";
+import { zOrderLabel, type ZOrderMove } from "./editor/z-order";
 
 /** TRD §16.3: autosave 2s after the last change. */
 const AUTOSAVE_DEBOUNCE_MS = 2000;
@@ -54,10 +56,28 @@ const TOOLS: readonly { tool: ActiveTool; label: string }[] = [
   { tool: "rectangle", label: "Rectangle" },
   { tool: "roundedRectangle", label: "Rounded" },
   { tool: "ellipse", label: "Ellipse" },
+  { tool: "circle", label: "Circle" },
+  { tool: "diamond", label: "Diamond" },
+  { tool: "triangle", label: "Triangle" },
   { tool: "text", label: "Text" },
   { tool: "line", label: "Line" },
   { tool: "arrow", label: "Arrow" },
   { tool: "pan", label: "Pan" },
+];
+
+/**
+ * Z-order actions (FR-OBJ-11).
+ *
+ * The shortcut is a tooltip rather than part of the label so the rail stays
+ * scannable; the label itself comes from `zOrderLabel`, the same string the
+ * history list shows, so the button and the undo entry can never disagree about
+ * what an action is called.
+ */
+const ARRANGE: readonly { move: ZOrderMove; shortcut: string }[] = [
+  { move: "front", shortcut: "Ctrl+Shift+]" },
+  { move: "forward", shortcut: "Ctrl+]" },
+  { move: "backward", shortcut: "Ctrl+[" },
+  { move: "back", shortcut: "Ctrl+Shift+[" },
 ];
 
 /** Formats offered in the rail (FR-EXP-01/02/03/04). WebP remains a COULD. */
@@ -308,6 +328,26 @@ export function App(): React.JSX.Element {
   }, []);
 
   /**
+   * FR-OBJ-11. Shared by the rail buttons and the canvas key bindings so both
+   * paths construct the command identically.
+   *
+   * A no-op is dropped rather than recorded. Without that, holding Ctrl+] on an
+   * already-frontmost shape would push hundreds of entries that undo nothing
+   * while evicting real work from the history cap (FR-HIST-02).
+   */
+  const handleReorder = useCallback((move: ZOrderMove): void => {
+    const editor = useEditorStore.getState();
+    if (editor.selection.length === 0) return;
+    const command = new ReorderObjectsCommand(
+      useDocumentStore.getState(),
+      editor.selection,
+      move,
+    );
+    if (command.isNoOp) return;
+    useHistoryStore.getState().execute(command);
+  }, []);
+
+  /**
    * FR-EXP-01..04. An export failure surfaces as a message the user can act on
    * (FR-EXP-18) — an empty canvas, a refused save, or a raster too large to
    * allocate all need different responses, and none of them is a stack trace.
@@ -526,6 +566,21 @@ export function App(): React.JSX.Element {
                   width="100%"
                   onClick={handleToggleGrid}
                 />
+              </VStack>
+
+              <Heading level={5}>Arrange</Heading>
+              <VStack gap={1}>
+                {ARRANGE.map((entry) => (
+                  <Button
+                    key={entry.move}
+                    label={zOrderLabel(entry.move)}
+                    size="sm"
+                    width="100%"
+                    tooltip={`${zOrderLabel(entry.move)} (${entry.shortcut})`}
+                    isDisabled={selection.length === 0}
+                    onClick={() => handleReorder(entry.move)}
+                  />
+                ))}
               </VStack>
 
               <Heading level={5}>Export</Heading>

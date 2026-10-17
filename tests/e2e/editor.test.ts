@@ -631,6 +631,202 @@ describe("Astryx Architecture Canvas — editing journey", () => {
     expect(await labelText()).toBe("Text");
   });
 
+  /**
+   * Draws with any shape tool.
+   *
+   * `drawRectangle` above predates the extra shapes; this generalises the same
+   * drag-then-wait rather than duplicating it once per tool.
+   */
+  async function drawShape(
+    toolLabel: string,
+    atX: number,
+    atY: number,
+    expectedCount: number,
+  ): Promise<void> {
+    await window.getByRole("button", { name: toolLabel, exact: true }).click();
+    const box = await canvasBox();
+    await drag(
+      { x: box.x + atX, y: box.y + atY },
+      { x: box.x + atX + 140, y: box.y + atY + 90 },
+    );
+    await waitFor(
+      async () => (await objectCount()) >= expectedCount,
+      `${expectedCount} shape(s) on the canvas`,
+    );
+  }
+
+  async function objectIds(): Promise<string[]> {
+    return objects().evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute("data-object-id") ?? ""),
+    );
+  }
+
+  /**
+   * Parses an SVG `points` attribute into numeric pairs.
+   *
+   * A polygon carries no x/y/width/height attributes, so `geometryOf` cannot
+   * measure one — the vertices *are* its geometry.
+   */
+  function verticesOf(points: string): [number, number][] {
+    return points
+      .trim()
+      .split(/\s+/)
+      .map((pair) => {
+        const [x, y] = pair.split(",").map(Number);
+        return [x as number, y as number];
+      });
+  }
+
+  function extentOf(vertices: readonly [number, number][]) {
+    const xs = vertices.map(([x]) => x);
+    const ys = vertices.map(([, y]) => y);
+    return {
+      minX: Math.min(...xs),
+      maxX: Math.max(...xs),
+      minY: Math.min(...ys),
+      maxY: Math.max(...ys),
+    };
+  }
+
+  /** Selects the shape drawn at (100,120) by clicking inside it. */
+  async function selectFirstShape(): Promise<void> {
+    const box = await canvasBox();
+    await window.mouse.click(box.x + 130, box.y + 150);
+  }
+
+  it("draws a diamond as a polygon inscribed in the dragged box", async () => {
+    await drawShape("Diamond", 100, 120, 1);
+
+    const polygon = window.locator("svg polygon[data-object-id]");
+    expect(await polygon.count()).toBe(1);
+
+    const vertices = verticesOf((await polygon.getAttribute("points")) ?? "");
+    expect(vertices).toHaveLength(4);
+
+    // Measured from the vertices rather than asserted as absolute coordinates:
+    // the viewport is not necessarily at the origin, and being inscribed is what
+    // actually matters, not where the shape landed.
+    const { minX, maxX, minY, maxY } = extentOf(vertices);
+    // Dragged 140 x 90 screen pixels at 100% zoom.
+    expect(maxX - minX).toBeCloseTo(140, 0);
+    expect(maxY - minY).toBeCloseTo(90, 0);
+
+    // One vertex per edge, at its midpoint. A polygon drawn inside its own box
+    // would leave the selection outline and the export frame surrounding air.
+    const midX = (minX + maxX) / 2;
+    const midY = (minY + maxY) / 2;
+    expect(vertices).toContainEqual([midX, minY]);
+    expect(vertices).toContainEqual([maxX, midY]);
+    expect(vertices).toContainEqual([midX, maxY]);
+    expect(vertices).toContainEqual([minX, midY]);
+  });
+
+  it("draws a triangle as a polygon with an apex and a full-width base", async () => {
+    await drawShape("Triangle", 100, 120, 1);
+
+    const vertices = verticesOf(
+      (await window
+        .locator("svg polygon[data-object-id]")
+        .getAttribute("points")) ?? "",
+    );
+    expect(vertices).toHaveLength(3);
+
+    const { minX, maxX, minY, maxY } = extentOf(vertices);
+    expect(maxX - minX).toBeCloseTo(140, 0);
+    expect(maxY - minY).toBeCloseTo(90, 0);
+    expect(vertices).toContainEqual([(minX + maxX) / 2, minY]);
+    expect(vertices).toContainEqual([maxX, maxY]);
+    expect(vertices).toContainEqual([minX, maxY]);
+  });
+
+  it("keeps a circle drag square even when the gesture is not", async () => {
+    await drawShape("Circle", 100, 120, 1);
+
+    const circle = window.locator("svg ellipse[data-object-id]");
+    expect(await circle.count()).toBe(1);
+    const rx = Number(await circle.getAttribute("rx"));
+    const ry = Number(await circle.getAttribute("ry"));
+
+    // The longer axis wins, so a 140 x 90 gesture yields a 140-unit circle. An
+    // ellipse here would mean the "circle" type quietly contradicts itself.
+    expect(rx).toBeCloseTo(70, 0);
+    expect(ry).toBeCloseTo(70, 0);
+  });
+
+  it("brings a selected shape to the front and undoes it as one step", async () => {
+    await drawShape("Rectangle", 100, 120, 1);
+    await drawShape("Rectangle", 280, 120, 2);
+    const before = await objectIds();
+    expect(before).toHaveLength(2);
+
+    await selectFirstShape();
+
+    // The shifted binding. This is the one that silently does nothing if it is
+    // matched on event.key: with Shift held a bracket key reports "}".
+    await window.keyboard.press("Control+Shift+]");
+    await waitFor(
+      async () => (await objectIds())[1] === before[0],
+      "the selected shape to paint last in the stack",
+    );
+
+    await window.keyboard.press("Control+z");
+    await waitFor(
+      async () => (await objectIds()).join("|") === before.join("|"),
+      "undo to restore the original stack order",
+    );
+  });
+
+  it("steps a shape forward exactly one place with the unshifted binding", async () => {
+    await drawShape("Rectangle", 100, 120, 1);
+    await drawShape("Rectangle", 280, 120, 2);
+    await drawShape("Rectangle", 100, 260, 3);
+    const before = await objectIds();
+    expect(before).toHaveLength(3);
+
+    await selectFirstShape();
+    await window.keyboard.press("Control+]");
+
+    const expected = [before[1], before[0], before[2]].join("|");
+    await waitFor(
+      async () => (await objectIds()).join("|") === expected,
+      "the bottom shape to step up one place without jumping to the top",
+    );
+  });
+
+  it("records no history entry when a shape is already at the front", async () => {
+    await drawShape("Rectangle", 100, 120, 1);
+
+    await selectFirstShape();
+    await window.keyboard.press("Control+Shift+]");
+    await window.keyboard.press("Control+Shift+]");
+
+    // One object is always frontmost, so both presses were no-ops. A single undo
+    // must therefore reach the Create command and remove the shape; had a no-op
+    // been recorded, undo would spend itself on that and leave the shape in
+    // place — the visible symptom of holding a shortcut and losing history.
+    await window.keyboard.press("Control+z");
+    await waitFor(
+      async () => (await objectCount()) === 0,
+      "one undo to reach the create command",
+    );
+  });
+
+  it("reorders from the rail button, not only from the keyboard", async () => {
+    await drawShape("Rectangle", 100, 120, 1);
+    await drawShape("Rectangle", 280, 120, 2);
+    const before = await objectIds();
+
+    await selectFirstShape();
+    await window
+      .getByRole("button", { name: "Bring to front", exact: true })
+      .click();
+
+    await waitFor(
+      async () => (await objectIds())[1] === before[0],
+      "the rail button to move the selected shape to the top",
+    );
+  });
+
   // Runs last: a failure here means one of the journeys above threw inside React.
   it("produces no renderer errors across the whole journey", () => {
     expect(pageErrors.map((error) => error.message)).toEqual([]);
