@@ -99,20 +99,28 @@ a transitive `@import` will not show up in the files you edited.
 ### Performance budget
 
 NFR-PERF-01 (window usable within 3s of a cold start) is **met, and enforced by
-a test rather than assumed**. Measured at 216ms from launch to canvas mounted —
-roughly 14x headroom.
+a test rather than assumed**. But quote the *cold* number when reasoning about
+margin: **1179ms**, not 216ms.
 
-The renderer bundle is ~1.35 MB in a single chunk and Vite warns about it. **Do
+The 216ms figure appears in most runs and is the warm-filesystem-cache best
+case. The same machine reported 1179ms on a run after several hours idle — a
+roughly 5x spread from cache state alone, with no code change. Both are inside
+the budget, so the requirement is met either way, but the real headroom is about
+2.5x rather than 14x. Treat any single warm sample as an optimistic bound, not
+as the measurement.
+
+The renderer bundle is ~1.38 MB in a single chunk and Vite warns about it. **Do
 not "fix" that warning with manual chunking.** It is a build-time size lint, not
 a performance measurement. This app loads from local disk inside Electron, where
 splitting the bundle buys more requests and more config for no measurable
 cold-start gain. The E2E suite prints the real number on every run
 (`[perf] cold start to canvas mounted: Nms`) — optimise against that instead.
 
-Read the caveats before trusting the number near the budget: it is one sample on
-a warm filesystem cache, taken against `out/main/index.js` under `node_modules`
-Electron rather than the packaged executable, so it excludes OS executable load
-and asar unpacking. A packaged cold start on a cold cache will be slower.
+Other caveats on the number: it is one sample, taken against `out/main/index.js`
+under `node_modules` Electron rather than the packaged executable, so it excludes
+OS executable load and asar unpacking. A packaged cold start will be slower
+again. If this ever approaches the budget, measure the packaged build on a cold
+cache before believing any figure from this suite.
 
 ### Environment gotchas
 
