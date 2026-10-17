@@ -271,24 +271,31 @@ completion.
 
 **Working:** creating an edge between two objects with a two-click gesture;
 straight, orthogonal and curved routing; all four arrowhead shapes at either
-end; anchoring to a named port or, failing that, to the shape's perimeter;
-fallback points for endpoints whose object is gone; independent selection;
-deleting a connector on its own; deleting a shape cascading to its edges;
-undo/redo across all of it; and identical rendering on the live canvas and in
-SVG, PNG, JPEG and PDF export.
+end; anchoring to a port, with the four cardinal ports derived for any shape
+that stores none and snap targets shown while wiring; falling back to the
+shape's perimeter when a click misses every port; fallback points for endpoints
+whose object is gone; labels drawn on both the canvas and in export, and
+editable inline by double-click; independent selection; deleting a connector on
+its own; deleting a shape cascading to its edges; undo/redo across all of it;
+and identical rendering on the live canvas and in SVG, PNG, JPEG and PDF export.
 
 **Not implemented:**
 
-- **Ports have no UI.** The schema carries them, `resolveConnector` honours a
-  `portId`, and a port rotates with its object — but nothing creates, displays
-  or hovers one, so every edge currently attaches to the perimeter.
-- **Connector labels are ignored.** `Connector.label` round-trips through
-  save/load and is never drawn.
 - **Endpoints cannot be re-attached.** There is no dragging of an existing
-  edge's ends, and no waypoint editing for orthogonal routes.
+  edge's ends onto a different shape or port, and no waypoint editing for
+  orthogonal routes. A mis-wired edge has to be deleted and redrawn.
 - **No connector styling UI.** Routing and arrowheads are reachable only through
   the document format, not the app. `DocumentSettings.connectorDefaults` is
-  preserved on save but is not consulted when a connector is created.
+  preserved on save but is not consulted when a connector is created, so a
+  document that customises it has no effect on new edges.
+- **Custom ports cannot be authored.** The four cardinal ports are derived, and
+  a shape that stores its own ports will use them, but nothing in the UI adds,
+  moves or removes one.
+- **`PortInstance.occupiedBy` is never populated.** The field exists so hover
+  feedback can be suppressed on an already-used port. It could be derived from
+  the connector list at render time instead, which would be impossible to let
+  drift out of sync; storing it has no consumer yet, so neither choice has been
+  made.
 
 ---
 
