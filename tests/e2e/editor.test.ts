@@ -29,6 +29,9 @@ const consoleErrors: string[] = [];
 const POLL_INTERVAL_MS = 50;
 const DEFAULT_TIMEOUT_MS = 10_000;
 
+/** NFR-PERF-01: the window must be usable within 3s of a cold start. */
+const COLD_START_BUDGET_MS = 3_000;
+
 async function waitFor(
   predicate: () => Promise<boolean> | boolean,
   description: string,
@@ -136,8 +139,19 @@ async function resetCanvas(): Promise<void> {
   );
 }
 
+/**
+ * Cold-start duration, from the launch call to the canvas existing in the DOM.
+ *
+ * That span covers Electron process spawn, main-process init, window creation,
+ * renderer bundle load and parse, and the React mount — the wait a user actually
+ * experiences. It excludes OS-level executable load and asar unpacking, so a
+ * packaged build will report somewhat worse than this.
+ */
+let coldStartMs = 0;
+
 beforeAll(async () => {
   profileDir = mkdtempSync(join(tmpdir(), "astryx-e2e-"));
+  const startedAt = Date.now();
   app = await electron.launch({
     args: [join(process.cwd(), "out", "main", "index.js")],
     env: { ...process.env, ASTRYX_USER_DATA: profileDir },
@@ -148,6 +162,7 @@ beforeAll(async () => {
     if (message.type() === "error") consoleErrors.push(message.text());
   });
   await window.waitForSelector(".canvas-host", { timeout: 30_000 });
+  coldStartMs = Date.now() - startedAt;
 });
 
 afterAll(async () => {
@@ -178,6 +193,15 @@ describe("Astryx Architecture Canvas — editing journey", () => {
       globalThis.astryxDesktop.app.getInfo(),
     );
     expect(info.ok).toBe(true);
+  });
+
+  it("reaches an interactive canvas inside the NFR-PERF-01 cold-start budget", () => {
+    // Reported as well as asserted, because the number is the point. A bundler
+    // warning about chunk size is not a performance measurement and should not
+    // be optimised against as though it were; this is the user's actual wait.
+    console.info(`[perf] cold start to canvas mounted: ${coldStartMs}ms`);
+    expect(coldStartMs).toBeGreaterThan(0);
+    expect(coldStartMs).toBeLessThan(COLD_START_BUDGET_MS);
   });
 
   it("draws a rectangle by dragging with the rectangle tool", async () => {
