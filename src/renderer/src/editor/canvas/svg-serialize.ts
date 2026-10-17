@@ -1,6 +1,6 @@
 import type { BoundingBox, DiagramObject } from "../../document/model";
 import { expandBounds, objectsBounds } from "../geometry";
-import { escapeXml, shapeGeometry } from "./shape-attrs";
+import { ARROW_MARKER_SVG, escapeXml, shapeGeometry } from "./shape-attrs";
 
 export interface SvgExportOptions {
   /** "transparent" omits the backdrop rect entirely (FR-STYLE-07, FR-EXP-15). */
@@ -67,10 +67,17 @@ export function serializeObjectsToSvg(
       ? ""
       : `  <rect x="${box.x}" y="${box.y}" width="${box.width}" height="${box.height}" fill="${escapeXml(background)}" />\n`;
 
+  // Only emit the marker when an arrow actually references it: an unused def is
+  // harmless but noise, and a *missing* one silently drops every arrowhead.
+  const defs = objects.some((object) => object.type === "arrow")
+    ? `  <defs>${ARROW_MARKER_SVG}</defs>`
+    : "";
+
   const body = objects.map((object) => `  ${renderObject(object)}`).join("\n");
 
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${box.x} ${box.y} ${box.width} ${box.height}">`,
+    defs,
     backgroundRect.replace(/\n$/, ""),
     body,
     "</svg>",

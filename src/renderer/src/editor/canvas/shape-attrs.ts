@@ -1,4 +1,8 @@
-import type { ColorValue, DiagramObject } from "../../document/model";
+import type {
+  ColorValue,
+  DiagramObject,
+  Transform,
+} from "../../document/model";
 
 /**
  * Resolves a document colour for a given target.
@@ -20,12 +24,53 @@ export function resolveColor(
 
 export type ShapeElement = "rect" | "ellipse" | "line" | "text" | "g";
 
+/**
+ * Single shared arrowhead marker.
+ *
+ * `context-stroke` makes the head follow the line's own stroke, so one marker
+ * definition serves every colour. Chromium and Firefox resolve it; a renderer
+ * that does not will fall back to a solid black head rather than dropping the
+ * arrowhead entirely, which is the failure mode FR-EXP-11 rule 7 cares least
+ * about. Both the live canvas and the export writer emit this same markup, so an
+ * exported arrow keeps its head.
+ */
+export const ARROW_MARKER_ID = "astryx-arrowhead";
+
+export const ARROW_MARKER_SVG =
+  `<marker id="${ARROW_MARKER_ID}" viewBox="0 0 10 10" refX="9" refY="5" ` +
+  `markerWidth="7" markerHeight="7" orient="auto-start-reverse">` +
+  `<path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" /></marker>`;
+
 export interface ShapeGeometry {
   element: ShapeElement;
   /** Presentation and geometry attributes, in a stable key order. */
   attrs: Record<string, string | number>;
   /** Only set for text objects; each entry becomes a `<tspan>` line. */
   lines?: string[];
+}
+
+export interface LineEndpoints {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+/**
+ * Endpoints of a line or arrow, honouring the flip flags that record which
+ * corner the drag started from (see `normaliseDragTransform`).
+ *
+ * Shared by the live renderer, the drag preview and the export writer: three
+ * call sites deriving endpoints independently is how a line ends up pointing one
+ * way on screen and the opposite way in the exported file.
+ */
+export function lineEndpoints(transform: Transform): LineEndpoints {
+  return {
+    x1: transform.flipX ? transform.x + transform.width : transform.x,
+    y1: transform.flipY ? transform.y + transform.height : transform.y,
+    x2: transform.flipX ? transform.x : transform.x + transform.width,
+    y2: transform.flipY ? transform.y : transform.y + transform.height,
+  };
 }
 
 function rotateAttr(object: DiagramObject): string | undefined {
@@ -41,7 +86,10 @@ function rotateAttr(object: DiagramObject): string | undefined {
  * shape cannot render one way on screen and another way in the exported file —
  * which is the fidelity requirement behind FR-EXP-11.
  */
-export function shapeGeometry(object: DiagramObject, target: "dom" | "export"): ShapeGeometry {
+export function shapeGeometry(
+  object: DiagramObject,
+  target: "dom" | "export",
+): ShapeGeometry {
   const { transform, style } = object;
   const fill = resolveColor(style.fill, target);
   const stroke = resolveColor(style.stroke, target);
@@ -51,8 +99,10 @@ export function shapeGeometry(object: DiagramObject, target: "dom" | "export"): 
   else shared.fill = "none";
   if (stroke !== undefined) shared.stroke = stroke;
   shared["stroke-width"] = style.strokeWidth ?? 1;
-  if (style.opacity !== undefined && style.opacity !== 1) shared.opacity = style.opacity;
-  if (style.dashArray && style.dashArray.length > 0) shared["stroke-dasharray"] = style.dashArray.join(" ");
+  if (style.opacity !== undefined && style.opacity !== 1)
+    shared.opacity = style.opacity;
+  if (style.dashArray && style.dashArray.length > 0)
+    shared["stroke-dasharray"] = style.dashArray.join(" ");
 
   const rotate = rotateAttr(object);
   if (rotate) shared.transform = rotate;
@@ -78,10 +128,10 @@ export function shapeGeometry(object: DiagramObject, target: "dom" | "export"): 
         attrs: {
           ...shared,
           fill: "none",
-          x1: transform.x,
-          y1: transform.y,
-          x2: transform.x + transform.width,
-          y2: transform.y + transform.height,
+          ...lineEndpoints(transform),
+          ...(object.type === "arrow"
+            ? { "marker-end": `url(#${ARROW_MARKER_ID})` }
+            : {}),
         },
       };
 
@@ -97,7 +147,10 @@ export function shapeGeometry(object: DiagramObject, target: "dom" | "export"): 
         element: "text",
         attrs: {
           ...shared,
-          fill: resolveColor(style.text?.color as ColorValue | undefined, target) ?? fill ?? "currentColor",
+          fill:
+            resolveColor(style.text?.color as ColorValue | undefined, target) ??
+            fill ??
+            "currentColor",
           stroke: "none",
           x: transform.x + transform.width / 2,
           y: transform.y + transform.height / 2,
@@ -114,7 +167,10 @@ export function shapeGeometry(object: DiagramObject, target: "dom" | "export"): 
     case "group":
     case "stencil":
     default: {
-      const radius = object.type === "roundedRectangle" ? (style.cornerRadius ?? 8) : (style.cornerRadius ?? 0);
+      const radius =
+        object.type === "roundedRectangle"
+          ? (style.cornerRadius ?? 8)
+          : (style.cornerRadius ?? 0);
       return {
         element: "rect",
         attrs: {

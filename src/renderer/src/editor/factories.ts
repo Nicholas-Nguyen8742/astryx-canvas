@@ -45,18 +45,26 @@ export function defaultStyle(): DiagramStyle {
   };
 }
 
-export function identityTransform(x: number, y: number, width: number, height: number): Transform {
+export function identityTransform(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): Transform {
   return { x, y, width, height, rotation: 0, scaleX: 1, scaleY: 1 };
 }
 
 /** Tools that can be dragged out on the canvas (TRD §14.5). */
-export type ShapeTool = "rectangle" | "roundedRectangle" | "ellipse" | "text";
+export type ShapeTool =
+  "rectangle" | "roundedRectangle" | "ellipse" | "text" | "line" | "arrow";
 
 const TOOL_TO_OBJECT_TYPE: Record<ShapeTool, ObjectType> = {
   rectangle: "rectangle",
   roundedRectangle: "roundedRectangle",
   ellipse: "ellipse",
   text: "text",
+  line: "line",
+  arrow: "arrow",
 };
 
 const DEFAULT_SIZES: Record<ShapeTool, { width: number; height: number }> = {
@@ -64,7 +72,12 @@ const DEFAULT_SIZES: Record<ShapeTool, { width: number; height: number }> = {
   roundedRectangle: { width: 160, height: 100 },
   ellipse: { width: 140, height: 140 },
   text: { width: 200, height: 40 },
+  line: { width: 160, height: 0 },
+  arrow: { width: 160, height: 0 },
 };
+
+/** Offset applied when pasting or duplicating, so the copy is visibly distinct. */
+export const PASTE_OFFSET = { x: 16, y: 16 };
 
 let counter = 0;
 
@@ -82,12 +95,22 @@ function nextId(prefix: string): string {
 export function createObject(
   tool: ShapeTool,
   transform: Transform,
-  overrides: { style?: Partial<DiagramStyle>; content?: TextContent; name?: string } = {},
+  overrides: {
+    style?: Partial<DiagramStyle>;
+    content?: TextContent;
+    name?: string;
+  } = {},
 ): DiagramObject {
   const style = { ...defaultStyle(), ...overrides.style };
 
   if (tool === "roundedRectangle" && style.cornerRadius === 0) {
     style.cornerRadius = 12;
+  }
+
+  // A line or arrow is stroke only; leaving a fill on it would paint a solid
+  // rectangle between the endpoints in every renderer and in export.
+  if (tool === "line" || tool === "arrow") {
+    delete style.fill;
   }
 
   return {
@@ -99,11 +122,15 @@ export function createObject(
     locked: false,
     transform,
     style,
-    content: overrides.content ?? (tool === "text" ? { value: "Text" } : undefined),
+    content:
+      overrides.content ?? (tool === "text" ? { value: "Text" } : undefined),
   };
 }
 
-export function defaultSizeFor(tool: ShapeTool): { width: number; height: number } {
+export function defaultSizeFor(tool: ShapeTool): {
+  width: number;
+  height: number;
+} {
   return DEFAULT_SIZES[tool];
 }
 
@@ -118,16 +145,60 @@ export function normaliseDragTransform(
   end: { x: number; y: number },
   tool: ShapeTool,
 ): Transform {
-  const x = Math.min(start.x, end.x);
-  const y = Math.min(start.y, end.y);
-  const width = Math.abs(end.x - start.x);
-  const height = Math.abs(end.y - start.y);
-
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
   const fallback = DEFAULT_SIZES[tool];
+
+  // A line's direction carries meaning — an arrow dragged right-to-left must
+  // still point left — so the sign is preserved on the flip flags while the
+  // bounding box stays positive. Everything downstream (bounds, selection
+  // outline, hit testing, export) assumes non-negative width and height.
+  if (tool === "line" || tool === "arrow") {
+    if (Math.hypot(dx, dy) < 4) {
+      return identityTransform(start.x, start.y, fallback.width, 0);
+    }
+    return {
+      ...identityTransform(
+        Math.min(start.x, end.x),
+        Math.min(start.y, end.y),
+        Math.abs(dx),
+        Math.abs(dy),
+      ),
+      flipX: dx < 0,
+      flipY: dy < 0,
+    };
+  }
+
   return identityTransform(
-    x,
-    y,
-    width < 4 ? fallback.width : width,
-    height < 4 ? fallback.height : height,
+    Math.min(start.x, end.x),
+    Math.min(start.y, end.y),
+    Math.abs(dx) < 4 ? fallback.width : Math.abs(dx),
+    Math.abs(dy) < 4 ? fallback.height : Math.abs(dy),
   );
+}
+
+/**
+ * Copies an object under a fresh id, offset so the duplicate is not hidden
+ * exactly beneath the original. Backs paste and duplicate (FR-OBJ-05/16).
+ *
+ * Nested values are copied rather than shared: two objects referencing one style
+ * or content object would make a later edit silently change both.
+ */
+export function cloneObject(
+  object: DiagramObject,
+  offset = PASTE_OFFSET,
+): DiagramObject {
+  return {
+    ...object,
+    id: nextId("obj"),
+    zIndex: 0,
+    transform: {
+      ...object.transform,
+      x: object.transform.x + offset.x,
+      y: object.transform.y + offset.y,
+    },
+    style: { ...object.style },
+    content: object.content ? { ...object.content } : undefined,
+    ports: object.ports ? object.ports.map((port) => ({ ...port })) : undefined,
+  };
 }

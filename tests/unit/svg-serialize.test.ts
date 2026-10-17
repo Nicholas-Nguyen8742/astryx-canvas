@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { createObject, identityTransform } from "../../src/renderer/src/editor/factories";
+import {
+  createObject,
+  identityTransform,
+  normaliseDragTransform,
+} from "../../src/renderer/src/editor/factories";
+import { ARROW_MARKER_ID } from "../../src/renderer/src/editor/canvas/shape-attrs";
 import { serializeObjectsToSvg } from "../../src/renderer/src/editor/canvas/svg-serialize";
 import type { DiagramObject } from "../../src/renderer/src/document/model";
 
@@ -31,15 +36,23 @@ describe("serializeObjectsToSvg", () => {
   });
 
   it("keeps document order as paint order (FR-EXP-11 rule 9)", () => {
-    const svg = serializeObjectsToSvg([rect("first"), rect("second"), rect("third")]);
-    const positions = ["first", "second", "third"].map((id) => svg.indexOf(`id="${id}"`));
+    const svg = serializeObjectsToSvg([
+      rect("first"),
+      rect("second"),
+      rect("third"),
+    ]);
+    const positions = ["first", "second", "third"].map((id) =>
+      svg.indexOf(`id="${id}"`),
+    );
     expect(positions.every((p) => p > -1)).toBe(true);
     expect([...positions].sort((a, b) => a - b)).toEqual(positions);
   });
 
   it("omits the backdrop rect for a transparent export (FR-EXP-15)", () => {
-    const transparent = serializeObjectsToSvg([rect("a")], { background: "transparent" });
-    expect(transparent).not.toContain("<rect x=\"0\"");
+    const transparent = serializeObjectsToSvg([rect("a")], {
+      background: "transparent",
+    });
+    expect(transparent).not.toContain('<rect x="0"');
     expect(transparent.match(/<rect/g)?.length).toBe(1);
   });
 
@@ -130,5 +143,56 @@ describe("serializeObjectsToSvg", () => {
     });
     expect(svg).toContain('width="1"');
     expect(svg).toContain('height="1"');
+  });
+});
+
+describe("line and arrow export", () => {
+  const arrow: DiagramObject = {
+    ...createObject("arrow", identityTransform(0, 0, 200, 100)),
+    id: "edge-1",
+  };
+  const line: DiagramObject = {
+    ...createObject("line", identityTransform(0, 0, 200, 100)),
+    id: "edge-2",
+  };
+
+  it("emits an arrowhead marker and references it (FR-EXP-11 rule 7)", () => {
+    const svg = serializeObjectsToSvg([arrow]);
+    expect(svg).toContain("<marker ");
+    expect(svg).toContain(`id="${ARROW_MARKER_ID}"`);
+    expect(svg).toContain(`marker-end="url(#${ARROW_MARKER_ID})"`);
+  });
+
+  it("omits the marker definition when no arrow references it", () => {
+    const svg = serializeObjectsToSvg([line]);
+    expect(svg).not.toContain("<marker ");
+    expect(svg).not.toContain("<defs>");
+    expect(svg).not.toContain("marker-end");
+  });
+
+  it("renders both as line elements with no fill", () => {
+    for (const object of [arrow, line]) {
+      const svg = serializeObjectsToSvg([object]);
+      expect(svg).toContain("<line ");
+      expect(svg).toContain('fill="none"');
+    }
+  });
+
+  it("keeps a right-to-left arrow pointing left in the exported file", () => {
+    // Dragged from (300,200) to (100,50): the exported endpoints must run the
+    // same way, not be normalised into the opposite direction.
+    const dragged = normaliseDragTransform(
+      { x: 300, y: 200 },
+      { x: 100, y: 50 },
+      "arrow",
+    );
+    const svg = serializeObjectsToSvg([
+      { ...createObject("arrow", dragged), id: "backwards" },
+    ]);
+
+    expect(svg).toContain('x1="300"');
+    expect(svg).toContain('y1="200"');
+    expect(svg).toContain('x2="100"');
+    expect(svg).toContain('y2="50"');
   });
 });

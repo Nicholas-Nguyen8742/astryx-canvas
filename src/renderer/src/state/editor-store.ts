@@ -58,6 +58,8 @@ export const SHAPE_TOOLS = [
   "roundedRectangle",
   "ellipse",
   "text",
+  "line",
+  "arrow",
 ] as const;
 
 export function isShapeTool(tool: ActiveTool): tool is ShapeTool {
