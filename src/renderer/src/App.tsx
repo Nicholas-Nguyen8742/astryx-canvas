@@ -48,6 +48,8 @@ const TOOLS: readonly { tool: ActiveTool; label: string }[] = [
   { tool: "roundedRectangle", label: "Rounded" },
   { tool: "ellipse", label: "Ellipse" },
   { tool: "text", label: "Text" },
+  { tool: "line", label: "Line" },
+  { tool: "arrow", label: "Arrow" },
   { tool: "pan", label: "Pan" },
 ];
 
@@ -480,8 +482,8 @@ export function App(): React.JSX.Element {
           </LayoutPanel>
         }
         content={
-          <LayoutContent>
-            <VStack gap={2}>
+          <LayoutContent isScrollable={false}>
+            <VStack gap={2} className="canvas-region">
               {recovery ? (
                 <HStack gap={2} vAlign="center">
                   <StackItem size="fill">
@@ -515,7 +517,12 @@ export function App(): React.JSX.Element {
                   {status.text}
                 </Text>
               ) : null}
-              <SvgCanvas />
+              {/* StackItem size="fill" is what gives the canvas the leftover
+                  height; without it the host collapses to the SVG default of
+                  150px and most of the drawing surface is unreachable. */}
+              <StackItem size="fill">
+                <SvgCanvas />
+              </StackItem>
             </VStack>
           </LayoutContent>
         }

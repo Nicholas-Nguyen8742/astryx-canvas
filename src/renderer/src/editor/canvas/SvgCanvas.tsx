@@ -33,7 +33,7 @@ import {
   useEditorStore,
   type ResizeHandle,
 } from "../../state/editor-store";
-import { shapeGeometry } from "./shape-attrs";
+import { ARROW_MARKER_ID, lineEndpoints, shapeGeometry } from "./shape-attrs";
 
 /** Handle edge length in screen pixels, so handles stay grabbable at any zoom. */
 const HANDLE_SCREEN_SIZE = 8;
@@ -194,6 +194,16 @@ function ShapePreview({
     );
   }
 
+  if (tool === "line" || tool === "arrow") {
+    return (
+      <line
+        {...shared}
+        {...lineEndpoints(transform)}
+        markerEnd={tool === "arrow" ? `url(#${ARROW_MARKER_ID})` : undefined}
+      />
+    );
+  }
+
   return (
     <rect
       {...shared}
@@ -275,11 +285,23 @@ export function SvgCanvas() {
         return;
       }
 
-      const currentSelection = useEditorStore.getState().selection;
-      if (currentSelection.length === 0) return;
-
       const doc = useDocumentStore.getState();
       const hist = useHistoryStore.getState();
+
+      // Select all (§14.4). Deliberately ahead of the empty-selection guard,
+      // since this is the shortcut you reach for when nothing is selected yet.
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        const page = doc.document.pages.find((p) => p.id === doc.activePageId);
+        const selectable = (page?.objects ?? [])
+          .filter((object) => object.visible && !object.locked)
+          .map((object) => object.id);
+        useEditorStore.getState().setSelection(selectable);
+        return;
+      }
+
+      const currentSelection = useEditorStore.getState().selection;
+      if (currentSelection.length === 0) return;
 
       if (event.key === "Delete" || event.key === "Backspace") {
         event.preventDefault();
@@ -624,6 +646,19 @@ export function SvgCanvas() {
               />
             )}
           </pattern>
+          {/* Same arrowhead the export writer emits, so an arrow looks identical
+              on screen and in the exported file (FR-EXP-11 rule 7). */}
+          <marker
+            id={ARROW_MARKER_ID}
+            viewBox="0 0 10 10"
+            refX={9}
+            refY={5}
+            markerWidth={7}
+            markerHeight={7}
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" />
+          </marker>
         </defs>
 
         {grid.enabled && gridPitch > MIN_GRID_PITCH ? (

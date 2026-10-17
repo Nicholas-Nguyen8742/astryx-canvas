@@ -34,8 +34,20 @@ body {
  * with the content); this element only provides the backdrop and the box the
  * canvas fills. Token-only, no raw hex or pixel values, per AGENTS.md.
  */
+/*
+ * The canvas has to claim the leftover height of the content region. StackItem
+ * size="fill" supplies the flex grow and the min-height reset; these two rules
+ * complete the chain down to the SVG. Without them the host collapses and the
+ * SVG falls back to the 150px default that a replaced element gets when its
+ * percentage height resolves against an auto-height parent — which silently made
+ * most of the drawing surface unreachable by pointer.
+ */
+.canvas-region {
+    height: 100%;
+}
+
 .canvas-host {
-    flex: 1;
+    height: 100%;
     min-height: 0;
     overflow: hidden;
     border-radius: var(--radius-container);
