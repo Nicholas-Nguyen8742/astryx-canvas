@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
@@ -8,7 +9,13 @@ import {
   type WheelEvent as ReactWheelEvent,
 } from "react";
 
-import type { DiagramObject, Point, Transform } from "../../document/model";
+import type {
+  ArrowType,
+  Connector,
+  DiagramObject,
+  Point,
+  Transform,
+} from "../../document/model";
 import {
   intersects,
   objectBounds,
@@ -40,7 +47,14 @@ import {
   useEditorStore,
   type ResizeHandle,
 } from "../../state/editor-store";
-import { ARROW_MARKER_ID, shapeGeometry } from "./shape-attrs";
+import {
+  ARROW_MARKER_BOX,
+  ARROW_MARKER_SHAPES,
+  arrowMarkerId,
+  connectorAttrs,
+  shapeGeometry,
+} from "./shape-attrs";
+import { resolveConnectors, type ResolvedConnector } from "../connectors";
 import { TextEditorOverlay } from "./TextEditorOverlay";
 
 /** Handle edge length in screen pixels, so handles stay grabbable at any zoom. */
@@ -65,6 +79,9 @@ const HANDLES: readonly ResizeHandle[] = [
 ];
 
 const NO_OBJECTS: readonly DiagramObject[] = [];
+
+/** Stable empty reference, so the selector below cannot return a new array. */
+const NO_CONNECTORS: readonly Connector[] = [];
 
 const NUDGE_DELTAS: Record<string, Point> = {
   ArrowLeft: { x: -1, y: 0 },
@@ -168,6 +185,74 @@ function RenderedObject({
 }
 
 /**
+ * Draws one connector.
+ *
+ * Two paths sharing one `d`, as with lines and arrows: a wide transparent one
+ * underneath so a 2px curve is actually clickable, and the visible one on top.
+ * Sharing the geometry means a connector cannot be selectable somewhere it is
+ * not drawn, which is the failure mode an independently-sized hit area produces.
+ */
+function RenderedConnector({
+  connector,
+  resolved,
+}: {
+  connector: Connector;
+  resolved: ResolvedConnector;
+}) {
+  const attrs = connectorAttrs(connector, resolved, "dom");
+  return (
+    <g
+      data-connector-id={connector.id}
+      style={{
+        pointerEvents: connector.locked ? ("none" as const) : undefined,
+      }}
+    >
+      <path
+        {...attrs}
+        stroke="transparent"
+        strokeWidth={LINE_HIT_WIDTH}
+        vectorEffect="non-scaling-stroke"
+      />
+      <path {...attrs} vectorEffect="non-scaling-stroke" />
+    </g>
+  );
+}
+
+/**
+ * Every arrowhead shape, defined unconditionally.
+ *
+ * The export writer emits only the markers a file actually references, because a
+ * standalone SVG is a user-visible artefact and dead defs are noise. In memory
+ * there is no such cost, and rendering all four removes a class of bug where the
+ * conditional set falls out of step with what the paths reference.
+ *
+ * Built from the same `ARROW_MARKER_SHAPES` table the export writer serialises,
+ * so an arrowhead cannot differ between screen and file.
+ */
+function ArrowMarkerDefs() {
+  const arrows = Object.keys(ARROW_MARKER_SHAPES) as Exclude<
+    ArrowType,
+    "none"
+  >[];
+  return (
+    <>
+      {arrows.map((arrow) => {
+        const shape = ARROW_MARKER_SHAPES[arrow];
+        return (
+          <marker key={arrow} id={arrowMarkerId(arrow)} {...ARROW_MARKER_BOX}>
+            {shape.element === "path" ? (
+              <path {...shape.attrs} />
+            ) : (
+              <circle {...shape.attrs} />
+            )}
+          </marker>
+        );
+      })}
+    </>
+  );
+}
+
+/**
  * The in-progress shape while dragging out a new object (TRD §14.5).
  *
  * A thin wrapper: the preview is a real `DiagramObject` with a reserved id that
@@ -200,6 +285,18 @@ export function SvgCanvas() {
     (state) =>
       state.document.pages.find((page) => page.id === state.activePageId)
         ?.objects ?? NO_OBJECTS,
+  );
+  const connectors = useDocumentStore(
+    (state) =>
+      state.document.pages.find((page) => page.id === state.activePageId)
+        ?.connectors ?? NO_CONNECTORS,
+  );
+  // Resolved per render but memoised on the two arrays that actually change. A
+  // drag re-renders this component on every pointermove, and re-resolving every
+  // connector per frame would be work whose inputs have not moved.
+  const resolvedConnectors = useMemo(
+    () => resolveConnectors(connectors, objects),
+    [connectors, objects],
   );
   const viewport = useEditorStore((state) => state.viewport);
   const selection = useEditorStore((state) => state.selection);
@@ -748,19 +845,10 @@ export function SvgCanvas() {
               />
             )}
           </pattern>
-          {/* Same arrowhead the export writer emits, so an arrow looks identical
-              on screen and in the exported file (FR-EXP-11 rule 7). */}
-          <marker
-            id={ARROW_MARKER_ID}
-            viewBox="0 0 10 10"
-            refX={9}
-            refY={5}
-            markerWidth={7}
-            markerHeight={7}
-            orient="auto-start-reverse"
-          >
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" />
-          </marker>
+          {/* The same arrowheads the export writer serialises, from one shared
+              table, so a head cannot look different on screen and in the file
+              (FR-EXP-11 rule 7). */}
+          <ArrowMarkerDefs />
         </defs>
 
         {grid.enabled && gridPitch > MIN_GRID_PITCH ? (
@@ -778,6 +866,24 @@ export function SvgCanvas() {
             .map((object) => (
               <RenderedObject key={object.id} object={object} />
             ))}
+
+          {/* After the objects, matching the export writer: an arrowhead meeting
+              a shape's perimeter would otherwise be half-covered by the shape it
+              points at. A connector that cannot resolve — an endpoint object
+              that is gone with no fallback point — is skipped rather than drawn
+              to the origin, which would invent an edge nobody authored. */}
+          {connectors
+            .filter((connector) => connector.visible)
+            .map((connector) => {
+              const resolved = resolvedConnectors.get(connector.id);
+              return resolved ? (
+                <RenderedConnector
+                  key={connector.id}
+                  connector={connector}
+                  resolved={resolved}
+                />
+              ) : null;
+            })}
 
           {interaction?.kind === "create" ? (
             <ShapePreview

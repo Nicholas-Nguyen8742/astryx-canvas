@@ -1,8 +1,11 @@
 import type {
+  ArrowType,
   ColorValue,
+  Connector,
   DiagramObject,
   Transform,
 } from "../../document/model";
+import type { ResolvedConnector } from "../connectors";
 
 /**
  * Resolves a document colour for a given target.
@@ -26,21 +29,162 @@ export type ShapeElement =
   "rect" | "ellipse" | "line" | "text" | "polygon" | "g";
 
 /**
- * Single shared arrowhead marker.
+ * Arrowhead markers.
  *
- * `context-stroke` makes the head follow the line's own stroke, so one marker
- * definition serves every colour. Chromium and Firefox resolve it; a renderer
- * that does not will fall back to a solid black head rather than dropping the
- * arrowhead entirely, which is the failure mode FR-EXP-11 rule 7 cares least
- * about. Both the live canvas and the export writer emit this same markup, so an
+ * `context-stroke` makes a head follow its own path's stroke, so one definition
+ * per *shape* serves every colour and every theme — four shapes, not four shapes
+ * times every stroke. Chromium and Firefox resolve it; a renderer that does not
+ * falls back to a solid black head rather than dropping the arrowhead entirely,
+ * which is the failure mode FR-EXP-11 rule 7 cares least about.
+ *
+ * Both the live canvas and the export writer emit this same markup, so an
  * exported arrow keeps its head.
  */
 export const ARROW_MARKER_ID = "astryx-arrowhead";
 
-export const ARROW_MARKER_SVG =
-  `<marker id="${ARROW_MARKER_ID}" viewBox="0 0 10 10" refX="9" refY="5" ` +
-  `markerWidth="7" markerHeight="7" orient="auto-start-reverse">` +
-  `<path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" /></marker>`;
+/**
+ * Arrowhead geometry, described as data rather than markup.
+ *
+ * Drawn inside a `0 0 10 10` viewBox with the tip at x=10. Both renderers
+ * consume this one table: the export writer serialises it to a string and the
+ * live canvas turns it into elements. Describing the heads twice, once as a
+ * template string and once as JSX, is how an exported arrowhead ends up subtly
+ * different from the one on screen.
+ */
+export interface ArrowMarkerShape {
+  element: "path" | "circle";
+  attrs: Record<string, string | number>;
+}
+
+export const ARROW_MARKER_SHAPES: Record<
+  Exclude<ArrowType, "none">,
+  ArrowMarkerShape
+> = {
+  triangle: {
+    element: "path",
+    attrs: { d: "M 0 0 L 10 5 L 0 10 z", fill: "context-stroke" },
+  },
+  open: {
+    element: "path",
+    attrs: {
+      d: "M 0 0 L 10 5 L 0 10",
+      fill: "none",
+      stroke: "context-stroke",
+      "stroke-width": 1.5,
+    },
+  },
+  diamond: {
+    element: "path",
+    attrs: { d: "M 0 5 L 5 0 L 10 5 L 5 10 z", fill: "context-stroke" },
+  },
+  circle: {
+    element: "circle",
+    attrs: { cx: 5, cy: 5, r: 4, fill: "context-stroke" },
+  },
+};
+
+/** Box and reference point shared by every head, so they cannot drift apart. */
+export const ARROW_MARKER_BOX = {
+  viewBox: "0 0 10 10",
+  refX: 9,
+  refY: 5,
+  markerWidth: 7,
+  markerHeight: 7,
+  orient: "auto-start-reverse",
+} as const;
+
+/**
+ * Marker id for an arrowhead, or undefined when there is no head to draw.
+ *
+ * `triangle` keeps the original bare id so documents and tests written before
+ * connectors existed still resolve it; the other shapes are suffixed.
+ *
+ * Returns `undefined` rather than `null` because the live canvas spreads this
+ * straight into a JSX `id` attribute, and React's prop types admit undefined but
+ * not null.
+ */
+export function arrowMarkerId(
+  arrow: ArrowType | undefined,
+): string | undefined {
+  if (!arrow || arrow === "none") return undefined;
+  return arrow === "triangle" ? ARROW_MARKER_ID : `${ARROW_MARKER_ID}-${arrow}`;
+}
+
+function markerToString(arrow: Exclude<ArrowType, "none">): string {
+  const shape = ARROW_MARKER_SHAPES[arrow];
+  const shapeAttrs = Object.entries(shape.attrs)
+    .map(([name, value]) => `${name}="${escapeXml(String(value))}"`)
+    .join(" ");
+  const boxAttrs = Object.entries(ARROW_MARKER_BOX)
+    .map(([name, value]) => `${name}="${value}"`)
+    .join(" ");
+  return (
+    `<marker id="${arrowMarkerId(arrow)}" ${boxAttrs}>` +
+    `<${shape.element} ${shapeAttrs} /></marker>`
+  );
+}
+
+/**
+ * Marker definitions for exactly the arrowheads in use.
+ *
+ * Emitting only the used ones keeps a standalone file of plain lines from
+ * carrying four dead defs. Omitting one that *is* referenced would silently drop
+ * an arrowhead, which is the worse of the two failures, so this is derived from
+ * the same list the paths are built from rather than maintained beside it.
+ *
+ * The live canvas does not call this: it renders every head unconditionally,
+ * because in-memory defs cost nothing and a conditional set is one more thing
+ * that can fall out of step with what the paths reference.
+ */
+export function arrowMarkerDefs(
+  arrows: readonly (ArrowType | undefined)[],
+): string {
+  const used = new Set<Exclude<ArrowType, "none">>();
+  for (const arrow of arrows) {
+    if (arrow && arrow !== "none") used.add(arrow);
+  }
+  return [...used].map(markerToString).join("");
+}
+
+/**
+ * Presentation attributes for a resolved connector.
+ *
+ * Shared by the live canvas and the export writer for the same reason
+ * `shapeGeometry` is: a connector that renders as a curve on screen and a
+ * straight line in the exported SVG is a fidelity failure the user only finds
+ * after they have already sent the file.
+ */
+export function connectorAttrs(
+  connector: Connector,
+  resolved: ResolvedConnector,
+  target: "dom" | "export",
+): Record<string, string | number> {
+  const { style } = connector;
+  const attrs: Record<string, string | number> = {
+    d: resolved.d,
+    // A connector is stroke only; an inherited fill would paint the area between
+    // the path's endpoints and turn an orthogonal route into a solid blob.
+    fill: "none",
+    stroke:
+      resolveColor(style.stroke, target) ??
+      (target === "dom" ? "var(--color-accent)" : "#1b1b1b"),
+    "stroke-width": style.strokeWidth ?? 1,
+  };
+
+  if (style.opacity !== undefined && style.opacity !== 1) {
+    attrs.opacity = style.opacity;
+  }
+  if (style.dashArray && style.dashArray.length > 0) {
+    attrs["stroke-dasharray"] = style.dashArray.join(" ");
+  }
+
+  const start = arrowMarkerId(style.startArrow);
+  const end = arrowMarkerId(style.endArrow);
+  if (start) attrs["marker-start"] = `url(#${start})`;
+  if (end) attrs["marker-end"] = `url(#${end})`;
+
+  return attrs;
+}
 
 export interface ShapeGeometry {
   element: ShapeElement;

@@ -382,7 +382,11 @@ export function App(): React.JSX.Element {
           page?.objects ?? [],
           editor.selection,
           doc.document.meta.title,
-          { ...options, viewportBounds },
+          {
+            ...options,
+            viewportBounds,
+            connectors: page?.connectors ?? [],
+          },
         );
         if (outcome.canceled) {
           setStatus({ kind: "info", text: "Export cancelled." });

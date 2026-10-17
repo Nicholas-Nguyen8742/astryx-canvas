@@ -4,7 +4,7 @@ import type {
   PdfOrientation,
   PdfPageSize,
 } from "../../../shared/ipc";
-import type { BoundingBox, DiagramObject } from "../document/model";
+import type { BoundingBox, Connector, DiagramObject } from "../document/model";
 import { UNTITLED_DOCUMENT_TITLE } from "../document/empty-document";
 import { expandBounds } from "../editor/geometry";
 import { canvasEngine } from "../editor/canvas/adapter";
@@ -43,6 +43,15 @@ export interface ExportRequest {
   pageSize?: PdfPageSize;
   orientation?: PdfOrientation;
   marginPoints?: number;
+  /**
+   * Connectors to include, resolved against the objects actually being exported.
+   *
+   * Deliberately passed unfiltered. Resolution already drops any connector whose
+   * endpoint is outside the export scope, because that object is absent from
+   * `objects` and the endpoint carries no fallback point. Filtering by scope here
+   * as well would be a second rule free to disagree with the first.
+   */
+  connectors?: readonly Connector[];
 }
 
 export interface ExportOutcome {
@@ -126,6 +135,7 @@ export async function exportDiagram(
     background,
     padding: 0,
     bounds: padded,
+    connectors: request.connectors,
   });
 
   let data: ArrayBuffer;

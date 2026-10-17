@@ -1,13 +1,20 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createConnector,
   createObject,
   identityTransform,
   normaliseDragTransform,
 } from "../../src/renderer/src/editor/factories";
-import { ARROW_MARKER_ID } from "../../src/renderer/src/editor/canvas/shape-attrs";
+import {
+  ARROW_MARKER_ID,
+  arrowMarkerId,
+} from "../../src/renderer/src/editor/canvas/shape-attrs";
 import { serializeObjectsToSvg } from "../../src/renderer/src/editor/canvas/svg-serialize";
-import type { DiagramObject } from "../../src/renderer/src/document/model";
+import type {
+  Connector,
+  DiagramObject,
+} from "../../src/renderer/src/document/model";
 
 function rect(id: string, x = 0, y = 0): DiagramObject {
   return { ...createObject("rectangle", identityTransform(x, y, 100, 50)), id };
@@ -274,5 +281,119 @@ describe("circle, diamond and triangle export (FR-OBJ-01)", () => {
     const svg = serializeObjectsToSvg([collapsed]);
     expect(svg).not.toContain("NaN");
     expect(svg).toContain('points="5,5 5,5 5,5 5,5"');
+  });
+});
+
+describe("connector export", () => {
+  // Two 100x100 boxes with a 100-unit gap, so the resolved path runs from a's
+  // right edge midpoint to b's left edge midpoint.
+  const shapes = [
+    {
+      ...createObject("rectangle", identityTransform(0, 0, 100, 100)),
+      id: "a",
+    },
+    {
+      ...createObject("rectangle", identityTransform(200, 0, 100, 100)),
+      id: "b",
+    },
+  ];
+
+  function conn(overrides: Partial<Connector> = {}): Connector {
+    return {
+      ...createConnector({ objectId: "a" }, { objectId: "b" }),
+      id: "edge-1",
+      ...overrides,
+    };
+  }
+
+  /** Overrides the style wholesale, since ConnectorStyle has no partial form. */
+  function styled(patch: Partial<Connector["style"]>): Connector {
+    return conn({ style: { ...conn().style, ...patch } });
+  }
+
+  it("draws a connector as a path resolved against the exported objects", () => {
+    const svg = serializeObjectsToSvg(shapes, { connectors: [conn()] });
+    expect(svg).toContain('<path id="edge-1"');
+    expect(svg).toContain('d="M 100 50 L 200 50"');
+  });
+
+  it("paints connectors after objects so arrowheads are not covered", () => {
+    const svg = serializeObjectsToSvg(shapes, { connectors: [conn()] });
+    expect(svg.indexOf('id="edge-1"')).toBeGreaterThan(svg.indexOf('id="b"'));
+  });
+
+  it("emits the default arrowhead and references it", () => {
+    const svg = serializeObjectsToSvg(shapes, { connectors: [conn()] });
+    expect(svg).toContain(`id="${ARROW_MARKER_ID}"`);
+    expect(svg).toContain(`marker-end="url(#${ARROW_MARKER_ID})"`);
+  });
+
+  it("emits a distinct marker for each arrowhead shape actually used", () => {
+    const svg = serializeObjectsToSvg(shapes, {
+      connectors: [styled({ startArrow: "open", endArrow: "diamond" })],
+    });
+    expect(svg).toContain(`id="${arrowMarkerId("open")}"`);
+    expect(svg).toContain(`id="${arrowMarkerId("diamond")}"`);
+    expect(svg).toContain(`marker-start="url(#${arrowMarkerId("open")})"`);
+    expect(svg).toContain(`marker-end="url(#${arrowMarkerId("diamond")})"`);
+    // An unreferenced head stays out of the file rather than riding along.
+    expect(svg).not.toContain(`id="${arrowMarkerId("circle")}"`);
+  });
+
+  it("omits marker defs entirely when no arrowhead is referenced", () => {
+    const svg = serializeObjectsToSvg(shapes, {
+      connectors: [styled({ startArrow: "none", endArrow: "none" })],
+    });
+    expect(svg).not.toContain("<marker ");
+    expect(svg).not.toContain("<defs>");
+  });
+
+  it("drops a connector whose endpoint object is not being exported", () => {
+    // This is what makes selection and viewport scoping work without a second
+    // filtering rule that could disagree with the first: the far endpoint is
+    // simply absent from the object list, so the connector cannot resolve.
+    const svg = serializeObjectsToSvg([shapes[0]!], { connectors: [conn()] });
+    expect(svg).not.toContain('id="edge-1"');
+  });
+
+  it("skips a hidden connector", () => {
+    const svg = serializeObjectsToSvg(shapes, {
+      connectors: [conn({ visible: false })],
+    });
+    expect(svg).not.toContain('id="edge-1"');
+  });
+
+  it("resolves connector colours to hex so the file stands alone", () => {
+    const svg = serializeObjectsToSvg(shapes, { connectors: [conn()] });
+    expect(svg).not.toContain("var(--");
+    expect(svg).toContain('stroke="#1b1b1b"');
+  });
+
+  it("strokes without filling, so an orthogonal route is not a solid blob", () => {
+    const svg = serializeObjectsToSvg(shapes, {
+      connectors: [conn({ routing: "orthogonal" })],
+    });
+    expect(svg).toContain('fill="none"');
+    // Counted on the connector's own path data rather than the whole document:
+    // the arrowhead marker is also a path and carries two L commands of its own.
+    const d = svg.match(/id="edge-1" d="([^"]+)"/)?.[1] ?? "";
+    expect(d).not.toBe("");
+    expect(d.match(/L /g)?.length).toBe(3);
+  });
+
+  it("honours a dash pattern and a start arrowhead together", () => {
+    const svg = serializeObjectsToSvg(shapes, {
+      connectors: [styled({ dashArray: [6, 4], startArrow: "circle" })],
+    });
+    expect(svg).toContain('stroke-dasharray="6 4"');
+    expect(svg).toContain(`marker-start="url(#${arrowMarkerId("circle")})"`);
+  });
+
+  it("serialises without connectors exactly as before", () => {
+    // The option is additive: existing callers pass nothing and must not gain a
+    // defs block or an empty group.
+    const svg = serializeObjectsToSvg(shapes);
+    expect(svg).not.toContain("<path ");
+    expect(svg).not.toContain("<defs>");
   });
 });
