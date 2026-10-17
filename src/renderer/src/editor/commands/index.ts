@@ -37,6 +37,21 @@ export interface DocumentMutator {
    */
   setContents(entries: Readonly<Record<string, TextContent | undefined>>): void;
   getContents(ids: readonly string[]): Record<string, TextContent | undefined>;
+  /**
+   * Ids of the active page in paint order, lowest first. Array position is
+   * authoritative for stacking; `zIndex` is only a mirror the store re-stamps on
+   * every write.
+   */
+  getObjectOrder(): string[];
+  /**
+   * Rearranges the active page's objects to match `order` (FR-OBJ-11).
+   *
+   * Objects whose id is absent from `order` are kept at the top of the stack
+   * rather than dropped. A reorder that could delete an object would turn a
+   * cosmetic stack change into data loss, and the safe failure mode costs
+   * nothing but a wrong z position.
+   */
+  setObjectOrder(order: readonly string[]): void;
 }
 
 /**

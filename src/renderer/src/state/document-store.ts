@@ -203,6 +203,31 @@ export function createDocumentStore(
         }
         return result;
       },
+
+      getObjectOrder() {
+        return activeObjects().map((object) => object.id);
+      },
+
+      setObjectOrder(order) {
+        if (order.length === 0) return;
+        mutateObjects((objects) => {
+          const remaining = new Map(
+            objects.map((object) => [object.id, object]),
+          );
+          const sorted: DiagramObject[] = [];
+          for (const id of order) {
+            const object = remaining.get(id);
+            if (!object) continue;
+            sorted.push(object);
+            remaining.delete(id);
+          }
+          // Anything the caller did not mention survives at the top, in its
+          // original relative order: Map preserves insertion order, and dropping
+          // these would silently delete objects from the document.
+          for (const object of remaining.values()) sorted.push(object);
+          return sorted;
+        });
+      },
     };
   });
 }

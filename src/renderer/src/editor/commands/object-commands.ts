@@ -5,6 +5,7 @@ import type {
   Transform,
 } from "../../document/model";
 import type { DocumentMutator, EditorCommand, ExtractedObject } from "./index";
+import { reorderIds, zOrderLabel, type ZOrderMove } from "../z-order";
 
 let sequence = 0;
 
@@ -196,5 +197,56 @@ export class UpdateContentCommand implements EditorCommand {
     if (!sameIdSet(previous.ids, this.ids)) return false;
     previous.to = this.to;
     return true;
+  }
+}
+
+/**
+ * Z-order changes (FR-OBJ-11).
+ *
+ * Captures the whole order on both sides rather than a delta. A block "bring
+ * forward" moves several objects past several others at once, and deriving the
+ * inverse from a delta is exactly the arithmetic that silently corrupts a
+ * document on redo; two id lists cannot be subtly wrong.
+ *
+ * The order is read in the constructor, so this command is for immediate
+ * execution — unlike a drag, there is no gesture whose pre-state has to be
+ * snapshotted before further edits land.
+ *
+ * Deliberately never coalesces. Each press is a distinct step the user may want
+ * to walk back individually, and there is no continuous gesture to fold.
+ */
+export class ReorderObjectsCommand implements EditorCommand {
+  readonly id = nextCommandId("z-order");
+  readonly label: string;
+  readonly timestamp = new Date().toISOString();
+
+  private readonly before: string[];
+  private readonly after: string[] | null;
+
+  constructor(
+    private readonly mutator: DocumentMutator,
+    ids: readonly string[],
+    move: ZOrderMove,
+  ) {
+    this.label = zOrderLabel(move);
+    this.before = mutator.getObjectOrder();
+    this.after = reorderIds(this.before, ids, move);
+  }
+
+  /**
+   * True when every selected object is already as far as it can go. Callers must
+   * skip these: recording a no-op would fill the history with entries that undo
+   * nothing while evicting real work from the cap (FR-HIST-02).
+   */
+  get isNoOp(): boolean {
+    return this.after === null;
+  }
+
+  execute(): void {
+    if (this.after) this.mutator.setObjectOrder(this.after);
+  }
+
+  undo(): void {
+    this.mutator.setObjectOrder(this.before);
   }
 }
